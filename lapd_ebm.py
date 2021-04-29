@@ -4,7 +4,7 @@ import numpy as np
 # import matplotlib.pyplot as plt
 # import matplotlib.animation as ani
 from tqdm import tqdm
-
+import wandb
 import os
 import datetime
 import shutil
@@ -97,6 +97,8 @@ if __name__ == "__main__":
         "lr": 1e-3
     }
 
+    wandb.init(project='lapd-ebm', entity='phil', config=hyperparams)
+
     num_epochs = hyperparams["num_epochs"]
     reg_amount = hyperparams["reg_amount"]
     replay_frac = hyperparams["replay_frac"]
@@ -177,6 +179,11 @@ if __name__ == "__main__":
         writer.add_scalar("energy/positive", avg_energy_pos, epoch)
         writer.add_scalar("energy/negative", avg_energy_neg, epoch)
         writer.add_scalar("energy/negative_relative", avg_energy_neg - avg_energy_pos, epoch)
+        wandb.log({"energy/loss": loss_avg,
+                   "energy/reg": reg_avg,
+                   "energy/positive": avg_energy_pos,
+                   "energy/negative": avg_energy_neg,
+                   "energy/negative_relative": avg_energy_neg - avg_energy_pos})
 
         if epoch % 10 == 0:
             writer.add_histogram("energy/pos_relative", energy_pos_list, epoch)
@@ -188,7 +195,8 @@ if __name__ == "__main__":
             writer.flush()
 
             torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict()},
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'replay_buffer_list': replay_buffer.sample_list},
                        path + "/model-{}.pt".format(epoch))
             tqdm.write("Epoch: {} // Loss: {:.3e} // Pos: {:.3e} // Neg: {:.3e} // "
                        "Neg_relative: {:.3e}".format(epoch, loss_avg, avg_energy_pos,
