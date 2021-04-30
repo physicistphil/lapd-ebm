@@ -86,15 +86,16 @@ if __name__ == "__main__":
     shutil.copy("lapd_ebm.py", path + "/lapd_ebm_copy.py")
 
     hyperparams = {
-        "num_epochs": 50,
+        "num_epochs": 10001,
         "reg_amount": 1e0,
         "replay_frac": 0.95,
         "replay_size": 8192,
         "sample_steps": 10,
-        "step_size": 1e0,
-        "noise_scale": 1e-1,
+        "step_size": 1e1,
+        "noise_scale": 5e-3,
         "batch_size_max": 128,
-        "lr": 1e-3
+        "lr": 1e-4,
+        "identifier": identifier
     }
 
     wandb.init(project='lapd-ebm', entity='phil', config=hyperparams)
@@ -153,8 +154,7 @@ if __name__ == "__main__":
             pos_energy = model(pos_x)
             neg_energy = model(neg_x.cuda())
     #         neg_energy = model(neg_x)
-            energy_regularization = (reg_amount * (pos_energy.square() +
-                                                  neg_energy.square())).mean()
+            energy_regularization = reg_amount * (pos_energy.square() + neg_energy.square()).mean()
             loss = (pos_energy - neg_energy).mean() + energy_regularization
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
@@ -188,21 +188,20 @@ if __name__ == "__main__":
         if epoch % 10 == 0:
             writer.add_histogram("energy/pos_relative", energy_pos_list, epoch)
             writer.add_histogram("energy/neg_relative", energy_neg_list, epoch)
-
             for name, weight in model.named_parameters():
                 writer.add_histogram("w/" + name, weight, epoch)
                 writer.add_histogram(f'g/{name}.grad', weight.grad, epoch)
             writer.flush()
+            tqdm.write("Epoch: {} // Loss: {:.3e} // Pos: {:.3e} // Neg: {:.3e} // "
+                       "Neg_relative: {:.3e}".format(epoch, loss_avg, avg_energy_pos,
+                                                     avg_energy_neg,
+                                                     avg_energy_neg - avg_energy_pos))
 
+        if epoch % 100 == 0:
             torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
                         'replay_buffer_list': replay_buffer.sample_list},
                        path + "/model-{}.pt".format(epoch))
-            tqdm.write("Epoch: {} // Loss: {:.3e} // Pos: {:.3e} // Neg: {:.3e} // "
-                       "Neg_relative: {:.3e}".format(epoch, loss_avg, avg_energy_pos,
-                                                     avg_energy_neg,
-                                                     avg_energy_neg - avg_energy_pos),
-                       end="\n")
-        pbar.update(1)
 
+        pbar.update(1)
     pbar.close()
