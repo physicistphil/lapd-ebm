@@ -34,10 +34,10 @@ def sample_langevin(x, model, sample_steps=10, step_size=10, noise_scale=0.005, 
     sample_list.append(x.detach())
     for _ in range(sample_steps):
         noise = torch.randn_like(x) * noise_scale
-        model_output = model(x)
+        model_output = model(x + noise)
         # Only inputs so that only grad wrt x is calculated (and not all remaining vars)
         gradient = torch.autograd.grad(model_output.sum(), x, only_inputs=True)[0]
-        x = x - gradient * step_size + noise
+        x = x - gradient * step_size
         sample_list.append(x.detach().cpu())
     if return_list:
         return sample_list
@@ -48,10 +48,10 @@ def sample_langevin(x, model, sample_steps=10, step_size=10, noise_scale=0.005, 
 def sample_langevin_cuda(x, model, sample_steps=10, step_size=10, noise_scale=0.005):
     for _ in range(sample_steps):
         noise = torch.randn_like(x) * noise_scale
-        model_output = model(x)
+        model_output = model(x + noise)
         # Only inputs so that only grad wrt x is calculated (and not all remaining vars)
         gradient = torch.autograd.grad(model_output.sum(), x, only_inputs=True)[0]
-        x = x - gradient * step_size + noise
+        x = x - gradient * step_size
     return x
 
 
@@ -61,19 +61,29 @@ class NeuralNet(torch.nn.Module):
         self.dense1 = torch.nn.Linear(10, 128)
         self.dense2 = torch.nn.Linear(128, 128)
         self.dense3 = torch.nn.Linear(128, 128)
+        # self.dense4 = torch.nn.Linear(256, 256)
+        # self.dense5 = torch.nn.Linear(256, 256)
+        # self.dense6 = torch.nn.Linear(256, 256)
         self.denseEnd = torch.nn.Linear(128, 1)
 
         self.dense1 = torch.nn.utils.spectral_norm(self.dense1)
         self.dense2 = torch.nn.utils.spectral_norm(self.dense2)
         self.dense3 = torch.nn.utils.spectral_norm(self.dense3)
-        self.denseEnd = torch.nn.utils.spectral_norm(self.denseEnd)
+        # self.dense4 = torch.nn.utils.spectral_norm(self.dense4)
+        # self.dense5 = torch.nn.utils.spectral_norm(self.dense5)
+        # self.dense6 = torch.nn.utils.spectral_norm(self.dense6)
+        # self.denseEnd = torch.nn.utils.spectral_norm(self.denseEnd)
 
     def forward(self, x):
         SiLU = torch.nn.functional.silu
+        # ELU = torch.nn.functional.elu
 
         x = SiLU(self.dense1(x))
         x = SiLU(self.dense2(x))
         x = SiLU(self.dense3(x))
+        # x = SiLU(self.dense4(x))
+        # x = SiLU(self.dense5(x))
+        # x = SiLU(self.dense6(x))
         x = self.denseEnd(x)
 
         return x
@@ -83,18 +93,19 @@ if __name__ == "__main__":
     identifier = datetime.datetime.now().strftime('%Y-%m-%d_%Hh-%Mm-%Ss')
     path = "experiments/" + identifier
     os.mkdir(path)
+    os.mkdir(path + "/checkpoints")
     shutil.copy("lapd_ebm.py", path + "/lapd_ebm_copy.py")
 
     hyperparams = {
-        "num_epochs": 10001,
+        "num_epochs": 50001,
         "reg_amount": 1e0,
-        "replay_frac": 0.95,
+        "replay_frac": 0.98,
         "replay_size": 8192,
-        "sample_steps": 10,
+        "sample_steps": 5,
         "step_size": 1e1,
         "noise_scale": 5e-3,
-        "batch_size_max": 128,
-        "lr": 1e-4,
+        "batch_size_max": 256,
+        "lr": 1e-2,
         "identifier": identifier
     }
 
@@ -113,7 +124,8 @@ if __name__ == "__main__":
     writer = SummaryWriter(log_dir=path)
     model = NeuralNet().cuda()
     # model = NeuralNet()
-    data = torch.tensor(np.load("data/isat_downsampled_8.npz")['arr_0'].reshape(-1, 10)).float()
+    data = torch.tensor(np.load("data/isat_downsampled_8_div3.npz")['arr_0'].reshape(-1, 10)).float()
+
     writer.add_graph(model, data[0:10].cuda())
 
     dataloader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(data),
@@ -123,7 +135,7 @@ if __name__ == "__main__":
     replay_buffer = ReplayBuffer(replay_size, np.random.randn(*data.shape))
 
     num_data = data.shape[0]
-    num_batches = int(np.ceil(num_data / 128))
+    num_batches = int(np.ceil(num_data / batch_size_max))
 
     pbar = tqdm(total=num_epochs)
     for epoch in range(num_epochs):
@@ -133,6 +145,7 @@ if __name__ == "__main__":
         energy_neg_list = torch.zeros((num_data, 1)).cuda()
 
         for pos_x, i in zip(dataloader, range(num_batches)):
+            optimizer.zero_grad()
             pos_x = torch.Tensor(pos_x[0]).cuda()
     #         pos_x = torch.Tensor(pos_x)
             pos_x.requires_grad = True
@@ -148,9 +161,9 @@ if __name__ == "__main__":
             neg_x = sample_langevin_cuda(neg_x, model, sample_steps=sample_steps,
                                          step_size=step_size, noise_scale=noise_scale)
             replay_buffer.add(neg_x.detach().cpu())
+            neg_x = neg_x.detach()
 
             optimizer.zero_grad()
-
             pos_energy = model(pos_x)
             neg_energy = model(neg_x.cuda())
     #         neg_energy = model(neg_x)
@@ -201,7 +214,7 @@ if __name__ == "__main__":
             torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
                         'replay_buffer_list': replay_buffer.sample_list},
-                       path + "/model-{}.pt".format(epoch))
+                       path + "/checkpoints/model-{}.pt".format(epoch))
 
         pbar.update(1)
     pbar.close()
