@@ -8,6 +8,7 @@ import wandb
 import os
 import datetime
 import shutil
+import importlib
 
 
 class ReplayBuffer():
@@ -58,18 +59,18 @@ def sample_langevin_cuda(x, model, sample_steps=10, step_size=10, noise_scale=0.
 class NeuralNet(torch.nn.Module):
     def __init__(self):
         super(NeuralNet, self).__init__()
-        self.dense1 = torch.nn.Linear(10, 128)
-        self.dense2 = torch.nn.Linear(128, 128)
-        self.dense3 = torch.nn.Linear(128, 128)
-        # self.dense4 = torch.nn.Linear(256, 256)
+        self.dense1 = torch.nn.Linear(10, 256)
+        self.dense2 = torch.nn.Linear(256, 256)
+        self.dense3 = torch.nn.Linear(256, 256)
+        self.dense4 = torch.nn.Linear(256, 256)
         # self.dense5 = torch.nn.Linear(256, 256)
         # self.dense6 = torch.nn.Linear(256, 256)
-        self.denseEnd = torch.nn.Linear(128, 1)
+        self.denseEnd = torch.nn.Linear(256, 1)
 
         self.dense1 = torch.nn.utils.spectral_norm(self.dense1)
         self.dense2 = torch.nn.utils.spectral_norm(self.dense2)
         self.dense3 = torch.nn.utils.spectral_norm(self.dense3)
-        # self.dense4 = torch.nn.utils.spectral_norm(self.dense4)
+        self.dense4 = torch.nn.utils.spectral_norm(self.dense4)
         # self.dense5 = torch.nn.utils.spectral_norm(self.dense5)
         # self.dense6 = torch.nn.utils.spectral_norm(self.dense6)
         # self.denseEnd = torch.nn.utils.spectral_norm(self.denseEnd)
@@ -81,7 +82,7 @@ class NeuralNet(torch.nn.Module):
         x = SiLU(self.dense1(x))
         x = SiLU(self.dense2(x))
         x = SiLU(self.dense3(x))
-        # x = SiLU(self.dense4(x))
+        x = SiLU(self.dense4(x))
         # x = SiLU(self.dense5(x))
         # x = SiLU(self.dense6(x))
         x = self.denseEnd(x)
@@ -105,8 +106,11 @@ if __name__ == "__main__":
         "step_size": 1e1,
         "noise_scale": 5e-3,
         "batch_size_max": 256,
-        "lr": 1e-2,
-        "identifier": identifier
+        "lr": 1e-4,
+        "identifier": identifier,
+        "resume": False,
+        # "resume_path": "2021-04-30_18h-39m-50s",
+        # "resume_version": "checkpoints/model-75000"
     }
 
     wandb.init(project='lapd-ebm', entity='phil', config=hyperparams)
@@ -120,11 +124,16 @@ if __name__ == "__main__":
     noise_scale = hyperparams["noise_scale"]
     batch_size_max = hyperparams["batch_size_max"]
     lr = hyperparams["lr"]
+    resume = hyperparams["resume"]
+    if resume:
+        resume_path = hyperparams["resume_path"]
+        resume_version = hyperparams["resume_version"]
 
     writer = SummaryWriter(log_dir=path)
     model = NeuralNet().cuda()
     # model = NeuralNet()
-    data = torch.tensor(np.load("data/isat_downsampled_8_div3.npz")['arr_0'].reshape(-1, 10)).float()
+    data_path = "data/isat_downsampled_8_div3.npz"
+    data = torch.tensor(np.load(data_path)['arr_0'].reshape(-1, 10)).float()
 
     writer.add_graph(model, data[0:10].cuda())
 
@@ -133,6 +142,24 @@ if __name__ == "__main__":
                                              num_workers=24, pin_memory=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.0, betas=(0.0, 0.999))
     replay_buffer = ReplayBuffer(replay_size, np.random.randn(*data.shape))
+
+    if resume:
+        spec = importlib.util.spec_from_file_location("lapd_ebm_copy", "experiments/" +
+                                                      resume_path + "/lapd_ebm_copy.py")
+        lapd_ebm = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(lapd_ebm)
+        # sample_langevin = lapd_ebm.sample_langevin
+        # sample_langevin_cuda = lapd_ebm.sample_langevin_cuda
+        # ReplayBuffer = lapd_ebm.ReplayBuffer
+        model = lapd_ebm.NeuralNet().cuda()
+        ckpt = torch.load("experiments/" + resume_path + "/" + resume_version + ".pt")
+        model.load_state_dict(ckpt['model_state_dict'], strict=False)
+        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        # data = torch.tensor(np.load("data/isat_downsampled_8_div3.npz")['arr_0'].reshape(-1, 10)).float()
+        # data = torch.tensor(np.load("data/isat_downsampled_8.npz")['arr_0'].reshape(-1, 10)).float()
+        # replay_buffer = ReplayBuffer(ckpt['replay_buffer_list'].shape[0],
+                                     # np.random.randn(*data.shape))
+        replay_buffer.sample_list = ckpt['replay_buffer_list']
 
     num_data = data.shape[0]
     num_batches = int(np.ceil(num_data / batch_size_max))
@@ -198,7 +225,7 @@ if __name__ == "__main__":
                    "energy/negative": avg_energy_neg,
                    "energy/negative_relative": avg_energy_neg - avg_energy_pos})
 
-        if epoch % 10 == 0:
+        if epoch % 500 == 0 or epoch == num_epochs - 1:
             writer.add_histogram("energy/pos_relative", energy_pos_list, epoch)
             writer.add_histogram("energy/neg_relative", energy_neg_list, epoch)
             for name, weight in model.named_parameters():
@@ -210,7 +237,7 @@ if __name__ == "__main__":
                                                      avg_energy_neg,
                                                      avg_energy_neg - avg_energy_pos))
 
-        if epoch % 100 == 0:
+        if epoch % 2500 == 0 or epoch == num_epochs - 1:
             torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
                         'replay_buffer_list': replay_buffer.sample_list},
