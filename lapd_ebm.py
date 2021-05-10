@@ -59,32 +59,64 @@ def sample_langevin_cuda(x, model, sample_steps=10, step_size=10, noise_scale=0.
 class NeuralNet(torch.nn.Module):
     def __init__(self):
         super(NeuralNet, self).__init__()
-        self.dense1 = torch.nn.Linear(10, 128)
-        self.dense2 = torch.nn.Linear(128, 128)
-        self.dense3 = torch.nn.Linear(128, 128)
+
+        # Dense model
+        # self.dense1 = torch.nn.Linear(10, 128)
+        # self.dense2 = torch.nn.Linear(128, 128)
+        # self.dense3 = torch.nn.Linear(128, 128)
         # self.dense4 = torch.nn.Linear(256, 256)
         # self.dense5 = torch.nn.Linear(256, 256)
         # self.dense6 = torch.nn.Linear(256, 256)
-        self.denseEnd = torch.nn.Linear(128, 1)
+        # self.denseEnd = torch.nn.Linear(128, 1)
 
-        self.dense1 = torch.nn.utils.spectral_norm(self.dense1)
-        self.dense2 = torch.nn.utils.spectral_norm(self.dense2)
-        self.dense3 = torch.nn.utils.spectral_norm(self.dense3)
+        # self.dense1 = torch.nn.utils.spectral_norm(self.dense1)
+        # self.dense2 = torch.nn.utils.spectral_norm(self.dense2)
+        # self.dense3 = torch.nn.utils.spectral_norm(self.dense3)
         # self.dense4 = torch.nn.utils.spectral_norm(self.dense4)
         # self.dense5 = torch.nn.utils.spectral_norm(self.dense5)
         # self.dense6 = torch.nn.utils.spectral_norm(self.dense6)
         # self.denseEnd = torch.nn.utils.spectral_norm(self.denseEnd)
 
+        # Conv model
+        self.conv1 = torch.nn.Conv1d(1, 4, 3, stride=1, padding=0)
+        self.conv2 = torch.nn.Conv1d(4, 8, 3, stride=1, padding=0)
+        self.conv3 = torch.nn.Conv1d(8, 16, 3, stride=1, padding=0)  # 16x2 output
+        self.convEnd = torch.nn.Linear(16 * 2, 32)
+        self.dense1 = torch.nn.Linear(2 + 16 * 2, 128)
+        self.dense2 = torch.nn.Linear(128, 128)
+        self.denseEnd = torch.nn.Linear(128, 1)
+
+        # self.conv1 = torch.nn.utils.spectral_norm(self.conv1)
+        # self.conv2 = torch.nn.utils.spectral_norm(self.conv2)
+        # self.conv3 = torch.nn.utils.spectral_norm(self.conv3)
+        # self.dense1 = torch.nn.utils.spectral_norm(self.dense1)
+        # self.dense2 = torch.nn.utils.spectral_norm(self.dense2)
+
     def forward(self, x):
         SiLU = torch.nn.functional.silu
         # ELU = torch.nn.functional.elu
 
-        x = SiLU(self.dense1(x))
-        x = SiLU(self.dense2(x))
-        x = SiLU(self.dense3(x))
+        # Dense model
+        # x = SiLU(self.dense1(x))
+        # x = SiLU(self.dense2(x))
+        # x = SiLU(self.dense3(x))
         # x = SiLU(self.dense4(x))
         # x = SiLU(self.dense5(x))
         # x = SiLU(self.dense6(x))
+        # x = self.denseEnd(x)
+
+        # Conv model
+        info = x[:, 0:2]
+        x = x[:, 2:]
+        x = x.unsqueeze(dim=1)
+        x = SiLU(self.conv1(x))
+        x = SiLU(self.conv2(x))
+        x = SiLU(self.conv3(x)).reshape(-1, 32)
+        x = self.convEnd(x)
+        x = x.squeeze()
+        x = torch.cat((info, x), 1)
+        x = SiLU(self.dense1(x))
+        x = SiLU(self.dense2(x))
         x = self.denseEnd(x)
 
         return x
@@ -100,7 +132,7 @@ if __name__ == "__main__":
     hyperparams = {
         "num_epochs": 50001,
         "reg_amount": 1e0,
-        "replay_frac": 0.98,
+        "replay_frac": 0.95,
         "replay_size": 8192,
         "sample_steps": 5,
         "step_size": 1e1,
@@ -108,9 +140,9 @@ if __name__ == "__main__":
         "batch_size_max": 256,
         "lr": 1e-4,
         "identifier": identifier,
-        "resume": True,
-        "resume_path": "2021-04-30_18h-39m-50s",
-        "resume_version": "checkpoints/model-75000"
+        "resume": False,
+        # "resume_path": "2021-04-30_18h-39m-50s",
+        # "resume_version": "checkpoints/model-75000"
     }
 
     wandb.init(project='lapd-ebm', entity='phil', config=hyperparams)
@@ -149,7 +181,7 @@ if __name__ == "__main__":
 
     dataloader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(data),
                                              batch_size=batch_size_max, shuffle=True,
-                                             num_workers=24, pin_memory=True)
+                                             num_workers=4, pin_memory=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.0, betas=(0.0, 0.999))
     replay_buffer = ReplayBuffer(replay_size, np.random.randn(*data.shape))
 
