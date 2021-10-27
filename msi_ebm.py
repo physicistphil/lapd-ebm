@@ -11,6 +11,21 @@ import shutil
 import importlib
 
 
+def load_data(path):
+    data_signals = np.load(path)['signals']
+    # Encode positions later
+    # data_positions = np.load(path)['positions']
+    data_bad_table = np.load(path)['bad_table']
+
+    complete_data = np.where(np.sum(data_bad_table, axis=1) == 0)[0]
+    data_signals = data_signals[complete_data]
+    data = torch.tensor(data_signals).float()
+
+    # NEED MEAN AND PTP ADJUSTMENT
+
+    return data
+
+
 class ReplayBuffer():
     def __init__(self, max_size, init_data):
         self.sample_list = init_data
@@ -18,15 +33,15 @@ class ReplayBuffer():
 
     # This starts populated with noise and then is eventually replaced with generated samples
     def add(self, samples):
-        self.sample_list = np.concatenate([self.sample_list, samples.numpy()], axis=0)
+        self.sample_list = torch.cat([self.sample_list, samples], 0)
         buffer_len = self.sample_list.shape[0]
         if buffer_len > self.max_size:
-            self.sample_list = np.delete(self.sample_list, np.s_[0:buffer_len - self.max_size], 0)
+            self.sample_list = self.sample_list[buffer_len - self.max_size:]
 
     def sample(self, num_samples):
         buffer_len = self.sample_list.shape[0]
-        indicies = np.random.randint(0, buffer_len,
-                                     num_samples if buffer_len > num_samples else buffer_len)
+        indicies = torch.randint(0, buffer_len,
+                                 (num_samples if buffer_len > num_samples else buffer_len,))
         return self.sample_list[indicies]
 
 
@@ -60,87 +75,157 @@ class NeuralNet(torch.nn.Module):
     def __init__(self):
         super(NeuralNet, self).__init__()
 
-        # Dense model
-        # self.dense1 = torch.nn.Linear(10, 128)
-        # self.dense2 = torch.nn.Linear(128, 128)
-        # self.dense3 = torch.nn.Linear(128, 128)
-        # self.dense4 = torch.nn.Linear(256, 256)
-        # self.dense5 = torch.nn.Linear(256, 256)
-        # self.dense6 = torch.nn.Linear(256, 256)
-        # self.denseEnd = torch.nn.Linear(128, 1)
-
-        # self.dense1 = torch.nn.utils.spectral_norm(self.dense1)
-        # self.dense2 = torch.nn.utils.spectral_norm(self.dense2)
-        # self.dense3 = torch.nn.utils.spectral_norm(self.dense3)
-        # self.dense4 = torch.nn.utils.spectral_norm(self.dense4)
-        # self.dense5 = torch.nn.utils.spectral_norm(self.dense5)
-        # self.dense6 = torch.nn.utils.spectral_norm(self.dense6)
-        # self.denseEnd = torch.nn.utils.spectral_norm(self.denseEnd)
+        spec_norm = torch.nn.utils.spectral_norm
+        ModuleList = torch.nn.ModuleList
 
         # Conv model
-        self.conv1 = torch.nn.Conv1d(1, 8, 3, stride=1, padding=0)
-        self.conv2 = torch.nn.Conv1d(8, 16, 3, stride=1, padding=0)
-        self.conv3 = torch.nn.Conv1d(16, 32, 3, stride=1, padding=0)  # 32x2 output
-        self.convEnd = torch.nn.Linear(32 * 2, 64)
-        self.dense1 = torch.nn.Linear(2 + 64, 128)
-        self.dense2 = torch.nn.Linear(128, 128)
-        self.dense3 = torch.nn.Linear(128, 128)
-        self.denseEnd = torch.nn.Linear(128, 1)
+        self.I_conv = ModuleList([spec_norm(torch.nn.Conv1d(1, 8, 32, stride=1, padding=0)),
+                                  spec_norm(torch.nn.Conv1d(8, 8, 32, stride=1, padding=0))])
+        self.I_dense = ModuleList([spec_norm(torch.nn.Linear(8 * (256 - 31 - 31), 64)),
+                                   spec_norm(torch.nn.Linear(64, 32)),
+                                   spec_norm(torch.nn.Linear(32, 32)),
+                                   spec_norm(torch.nn.Linear(32, 32))])
 
-        self.conv1 = torch.nn.utils.spectral_norm(self.conv1)
-        self.conv2 = torch.nn.utils.spectral_norm(self.conv2)
-        self.conv3 = torch.nn.utils.spectral_norm(self.conv3)
-        self.dense1 = torch.nn.utils.spectral_norm(self.dense1)
-        self.dense2 = torch.nn.utils.spectral_norm(self.dense2)
-        self.dense3 = torch.nn.utils.spectral_norm(self.dense3)
+        self.V_conv = ModuleList([spec_norm(torch.nn.Conv1d(1, 8, 32, stride=1, padding=0)),
+                                  spec_norm(torch.nn.Conv1d(8, 8, 32, stride=1, padding=0))])
+        self.V_dense = ModuleList([spec_norm(torch.nn.Linear(8 * (256 - 31 - 31), 64)),
+                                   spec_norm(torch.nn.Linear(64, 32)),
+                                   spec_norm(torch.nn.Linear(32, 32)),
+                                   spec_norm(torch.nn.Linear(32, 32))])
+
+        self.n_conv = ModuleList([spec_norm(torch.nn.Conv1d(1, 8, 32, stride=1, padding=0)),
+                                  spec_norm(torch.nn.Conv1d(8, 8, 32, stride=1, padding=0))])
+        self.n_dense = ModuleList([spec_norm(torch.nn.Linear(8 * (256 - 31 - 31), 64)),
+                                   spec_norm(torch.nn.Linear(64, 32)),
+                                   spec_norm(torch.nn.Linear(32, 32)),
+                                   spec_norm(torch.nn.Linear(32, 32))])
+
+        self.d0_conv = ModuleList([spec_norm(torch.nn.Conv1d(1, 8, 32, stride=1, padding=0)),
+                                   spec_norm(torch.nn.Conv1d(8, 8, 32, stride=1, padding=0))])
+        self.d0_dense = ModuleList([spec_norm(torch.nn.Linear(8 * (256 - 31 - 31), 64)),
+                                    spec_norm(torch.nn.Linear(64, 32)),
+                                    spec_norm(torch.nn.Linear(32, 32)),
+                                    spec_norm(torch.nn.Linear(32, 32))])
+
+        self.d1_conv = ModuleList([spec_norm(torch.nn.Conv1d(1, 8, 32, stride=1, padding=0)),
+                                   spec_norm(torch.nn.Conv1d(8, 8, 32, stride=1, padding=0))])
+        self.d1_dense = ModuleList([spec_norm(torch.nn.Linear(8 * (256 - 31 - 31), 64)),
+                                    spec_norm(torch.nn.Linear(64, 32)),
+                                    spec_norm(torch.nn.Linear(32, 32)),
+                                    spec_norm(torch.nn.Linear(32, 32))])
+
+        self.d2_conv = ModuleList([spec_norm(torch.nn.Conv1d(1, 8, 32, stride=1, padding=0)),
+                                   spec_norm(torch.nn.Conv1d(8, 8, 32, stride=1, padding=0))])
+        self.d2_dense = ModuleList([spec_norm(torch.nn.Linear(8 * (256 - 31 - 31), 64)),
+                                    spec_norm(torch.nn.Linear(64, 32)),
+                                    spec_norm(torch.nn.Linear(32, 32)),
+                                    spec_norm(torch.nn.Linear(32, 32))])
+
+        self.B_conv = ModuleList([spec_norm(torch.nn.Conv1d(1, 8, 32, stride=1, padding=0)),
+                                  spec_norm(torch.nn.Conv1d(8, 8, 32, stride=1, padding=0))])
+        self.B_dense = ModuleList([spec_norm(torch.nn.Linear(8 * (128 - 31 - 31), 64)),
+                                   spec_norm(torch.nn.Linear(64, 32)),
+                                   spec_norm(torch.nn.Linear(32, 32)),
+                                   spec_norm(torch.nn.Linear(32, 32))])
+
+        self.p_layers = ModuleList([spec_norm(torch.nn.Linear(51, 32)),
+                                    spec_norm(torch.nn.Linear(32, 32)),
+                                    spec_norm(torch.nn.Linear(32, 32))])
+
+        self.energy_layers = ModuleList([spec_norm(torch.nn.Linear(32 * 8, 32)),
+                                         spec_norm(torch.nn.Linear(32, 32)),
+                                         spec_norm(torch.nn.Linear(32, 32))])
+        self.energy_final = torch.nn.Linear(32, 1)
 
     def forward(self, x):
         SiLU = torch.nn.functional.silu
         # ELU = torch.nn.functional.elu
 
-        # Dense model
-        # x = SiLU(self.dense1(x))
-        # x = SiLU(self.dense2(x))
-        # x = SiLU(self.dense3(x))
-        # x = SiLU(self.dense4(x))
-        # x = SiLU(self.dense5(x))
-        # x = SiLU(self.dense6(x))
-        # x = self.denseEnd(x)
+        batch_size = x.shape[0]
 
-        # Conv model
-        info = x[:, 0:2]
-        x = x[:, 2:]
-        x = x.unsqueeze(dim=1)
-        x = SiLU(self.conv1(x))
-        x = SiLU(self.conv2(x))
-        x = SiLU(self.conv3(x)).reshape(-1, 64)
-        x = self.convEnd(x)
-        x = x.squeeze()
-        x = torch.cat((info, x), 1)
-        x = SiLU(self.dense1(x))
-        x = SiLU(self.dense2(x))
-        x = SiLU(self.dense3(x))
-        x = self.denseEnd(x)
+        I_x = x[:, 256 * 0:256 * 1].unsqueeze(dim=1)
+        V_x = x[:, 256 * 1:256 * 2].unsqueeze(dim=1)
+        n_x = x[:, 256 * 2:256 * 3].unsqueeze(dim=1)
+        d0_x = x[:, 256 * 3:256 * 4].unsqueeze(dim=1)
+        d1_x = x[:, 256 * 4:256 * 5].unsqueeze(dim=1)
+        d2_x = x[:, 256 * 5:256 * 6].unsqueeze(dim=1)
+        B_x = x[:, 1536:1536 + 128].unsqueeze(dim=1)
+        p_x = x[:, 1664:1664 + 51]  # don't need unsqueeze because no conv ops
+
+        for layer in self.I_conv:
+            I_x = SiLU(layer(I_x))
+        I_x = (I_x).reshape(batch_size, -1)
+        for layer in self.I_dense:
+            I_x = SiLU(layer(I_x))
+
+        for layer in self.V_conv:
+            V_x = SiLU(layer(V_x))
+        V_x = (V_x).reshape(batch_size, -1)
+        for layer in self.V_dense:
+            V_x = SiLU(layer(V_x))
+
+        for layer in self.n_conv:
+            n_x = SiLU(layer(n_x))
+        n_x = (n_x).reshape(batch_size, -1)
+        for layer in self.n_dense:
+            n_x = SiLU(layer(n_x))
+
+        for layer in self.d0_conv:
+            d0_x = SiLU(layer(d0_x))
+        d0_x = (d0_x).reshape(batch_size, -1)
+        for layer in self.d0_dense:
+            d0_x = SiLU(layer(d0_x))
+
+        for layer in self.d1_conv:
+            d1_x = SiLU(layer(d1_x))
+        d1_x = (d1_x).reshape(batch_size, -1)
+        for layer in self.d1_dense:
+            d1_x = SiLU(layer(d1_x))
+
+        for layer in self.d2_conv:
+            d2_x = SiLU(layer(d2_x))
+        d2_x = (d2_x).reshape(batch_size, -1)
+        for layer in self.d2_dense:
+            d2_x = SiLU(layer(d2_x))
+
+        for layer in self.B_conv:
+            B_x = SiLU(layer(B_x))
+        B_x = (B_x).reshape(batch_size, -1)
+        for layer in self.B_dense:
+            B_x = SiLU(layer(B_x))
+
+        for layer in self.p_layers:
+            p_x = SiLU(layer(p_x))
+        # p_x = torch.squeeze(p_x)
+        # for layer in self.p_dense:
+            # p_x = SiLU(layer(p_x))
+        x = torch.cat((I_x, V_x, n_x, d0_x, d1_x, d2_x, B_x, p_x), 1)
+
+        for layer in self.energy_layers:
+            x = SiLU(layer(x))
+        x = self.energy_final(x)
 
         return x
 
 
 if __name__ == "__main__":
     identifier = datetime.datetime.now().strftime('%Y-%m-%d_%Hh-%Mm-%Ss')
-    path = "experiments/" + identifier
+    project_name = "msi_ebm"
+    exp_path = "experiments_msi/"
+    path = exp_path + identifier
     os.mkdir(path)
     os.mkdir(path + "/checkpoints")
-    shutil.copy("lapd_ebm.py", path + "/lapd_ebm_copy.py")
+    shutil.copy(project_name + ".py", path + "/" + project_name + "_copy.py")
 
     hyperparams = {
-        "num_epochs": 30001,
+        "num_epochs": 51,
         "reg_amount": 1e0,
         "replay_frac": 0.98,
         "replay_size": 8192,
-        "sample_steps": 10,
-        "step_size": 1e-2,
+        "sample_steps": 5,
+        "step_size": 1e-1,
         "noise_scale": 5e-3,
-        "batch_size_max": 256,
+        "batch_size_max": 1024,
         "lr": 1e-4,
         "weight_decay": 1e-1,
         "identifier": identifier,
@@ -167,33 +252,32 @@ if __name__ == "__main__":
     writer = SummaryWriter(log_dir=path)
     model = NeuralNet().cuda()
     if resume:
-        spec = importlib.util.spec_from_file_location("lapd_ebm_copy", "experiments/" +
-                                                      resume_path + "/lapd_ebm_copy.py")
-        lapd_ebm = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(lapd_ebm)
-        # sample_langevin = lapd_ebm.sample_langevin
-        # sample_langevin_cuda = lapd_ebm.sample_langevin_cuda
-        # ReplayBuffer = lapd_ebm.ReplayBuffer
-        model = lapd_ebm.NeuralNet().cuda()
+        spec = importlib.util.spec_from_file_location(project_name + "_copy", exp_path +
+                                                      resume_path + "/" + project_name + "_copy.py")
+        ebm = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ebm)
+        # sample_langevin = ebm.sample_langevin
+        # sample_langevin_cuda = ebm.sample_langevin_cuda
+        # ReplayBuffer = ebm.ReplayBuffer
+        model = ebm.NeuralNet().cuda()
 
-    # model = NeuralNet()
-    data_path = "data/isat_downsampled_8_div3.npz"
-    data = torch.tensor(np.load(data_path)['arr_0'].reshape(-1, 10)).float()
+    data_path = "data/data-MSI-hairpin_001.npz"
+    data = load_data(data_path)
 
-    writer.add_graph(model, data[0:10].cuda())
+    # writer.add_graph(model, data[0:1].cuda())
 
     dataloader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(data),
                                              batch_size=batch_size_max, shuffle=True,
                                              num_workers=2, pin_memory=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay,
                                   betas=(0.0, 0.999))
-    replay_buffer = ReplayBuffer(replay_size, np.random.randn(*data.shape))
+    replay_buffer = ReplayBuffer(replay_size, torch.randn(*data.shape).cuda())
 
     if resume:
         # sample_langevin = lapd_ebm.sample_langevin
         # sample_langevin_cuda = lapd_ebm.sample_langevin_cuda
         # ReplayBuffer = lapd_ebm.ReplayBuffer
-        ckpt = torch.load("experiments/" + resume_path + "/" + resume_version + ".pt")
+        ckpt = torch.load(exp_path + resume_path + "/" + resume_version + ".pt")
         model.load_state_dict(ckpt['model_state_dict'], strict=False)
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         # data = torch.tensor(np.load("data/isat_downsampled_8_div3.npz")['arr_0'].reshape(-1, 10)).float()
@@ -206,8 +290,11 @@ if __name__ == "__main__":
     num_batches = int(np.ceil(num_data / batch_size_max))
 
     num_parameters = np.sum([p.numel() for p in model.parameters() if p.requires_grad])
+    print("Parameters: {}".format(num_parameters))
     hyperparams['num_parameters'] = num_parameters
-    wandb.init(project='lapd-ebm', entity='phil', config=hyperparams)
+    wandb.init(project="msi-ebm", entity='phil',
+               group="Simple_EBM", job_type="crash test",
+               config=hyperparams)
 
     pbar = tqdm(total=num_epochs)
     for epoch in range(num_epochs):
@@ -224,15 +311,15 @@ if __name__ == "__main__":
             batch_size = pos_x.shape[0]
 
             neg_x = replay_buffer.sample(int(batch_size * replay_frac))
-            neg_x_rand = np.random.randn(batch_size - neg_x.shape[0], *list(pos_x.shape[1:]))
-            neg_x = np.concatenate([neg_x, neg_x_rand], axis=0)
-            neg_x = torch.Tensor(neg_x).cuda()
+            neg_x_rand = torch.randn(batch_size - neg_x.shape[0], *list(pos_x.shape[1:])).cuda()
+            neg_x = torch.cat([neg_x, neg_x_rand], 0)
+            # neg_x = torch.Tensor(neg_x).cuda()
     #         neg_x = torch.Tensor(neg_x)
             neg_x.requires_grad = True
 
             neg_x = sample_langevin_cuda(neg_x, model, sample_steps=sample_steps,
                                          step_size=step_size, noise_scale=noise_scale)
-            replay_buffer.add(neg_x.detach().cpu())
+            replay_buffer.add(neg_x.detach())
             neg_x = neg_x.detach()
 
             optimizer.zero_grad()
@@ -270,7 +357,7 @@ if __name__ == "__main__":
                    "energy/negative": avg_energy_neg,
                    "energy/negative_relative": avg_energy_neg - avg_energy_pos})
 
-        if epoch % 500 == 0 or epoch == num_epochs - 1:
+        if epoch % 5 == 0 or epoch == num_epochs - 1:
             writer.add_histogram("energy/pos_relative", energy_pos_list, epoch)
             writer.add_histogram("energy/neg_relative", energy_neg_list, epoch)
             for name, weight in model.named_parameters():
@@ -282,7 +369,7 @@ if __name__ == "__main__":
                                                      avg_energy_neg,
                                                      avg_energy_neg - avg_energy_pos))
 
-        if epoch % 2500 == 0 or epoch == num_epochs - 1:
+        if epoch % 25 == 0 or epoch == num_epochs - 1:
             torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
                         'replay_buffer_list': replay_buffer.sample_list},
