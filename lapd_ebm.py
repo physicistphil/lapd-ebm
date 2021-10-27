@@ -78,19 +78,21 @@ class NeuralNet(torch.nn.Module):
         # self.denseEnd = torch.nn.utils.spectral_norm(self.denseEnd)
 
         # Conv model
-        self.conv1 = torch.nn.Conv1d(1, 4, 3, stride=1, padding=0)
-        self.conv2 = torch.nn.Conv1d(4, 8, 3, stride=1, padding=0)
-        self.conv3 = torch.nn.Conv1d(8, 16, 3, stride=1, padding=0)  # 16x2 output
-        self.convEnd = torch.nn.Linear(16 * 2, 32)
-        self.dense1 = torch.nn.Linear(2 + 16 * 2, 128)
+        self.conv1 = torch.nn.Conv1d(1, 8, 3, stride=1, padding=0)
+        self.conv2 = torch.nn.Conv1d(8, 16, 3, stride=1, padding=0)
+        self.conv3 = torch.nn.Conv1d(16, 32, 3, stride=1, padding=0)  # 32x2 output
+        self.convEnd = torch.nn.Linear(32 * 2, 64)
+        self.dense1 = torch.nn.Linear(2 + 64, 128)
         self.dense2 = torch.nn.Linear(128, 128)
+        self.dense3 = torch.nn.Linear(128, 128)
         self.denseEnd = torch.nn.Linear(128, 1)
 
-        # self.conv1 = torch.nn.utils.spectral_norm(self.conv1)
-        # self.conv2 = torch.nn.utils.spectral_norm(self.conv2)
-        # self.conv3 = torch.nn.utils.spectral_norm(self.conv3)
-        # self.dense1 = torch.nn.utils.spectral_norm(self.dense1)
-        # self.dense2 = torch.nn.utils.spectral_norm(self.dense2)
+        self.conv1 = torch.nn.utils.spectral_norm(self.conv1)
+        self.conv2 = torch.nn.utils.spectral_norm(self.conv2)
+        self.conv3 = torch.nn.utils.spectral_norm(self.conv3)
+        self.dense1 = torch.nn.utils.spectral_norm(self.dense1)
+        self.dense2 = torch.nn.utils.spectral_norm(self.dense2)
+        self.dense3 = torch.nn.utils.spectral_norm(self.dense3)
 
     def forward(self, x):
         SiLU = torch.nn.functional.silu
@@ -111,12 +113,13 @@ class NeuralNet(torch.nn.Module):
         x = x.unsqueeze(dim=1)
         x = SiLU(self.conv1(x))
         x = SiLU(self.conv2(x))
-        x = SiLU(self.conv3(x)).reshape(-1, 32)
+        x = SiLU(self.conv3(x)).reshape(-1, 64)
         x = self.convEnd(x)
         x = x.squeeze()
         x = torch.cat((info, x), 1)
         x = SiLU(self.dense1(x))
         x = SiLU(self.dense2(x))
+        x = SiLU(self.dense3(x))
         x = self.denseEnd(x)
 
         return x
@@ -130,22 +133,21 @@ if __name__ == "__main__":
     shutil.copy("lapd_ebm.py", path + "/lapd_ebm_copy.py")
 
     hyperparams = {
-        "num_epochs": 50001,
+        "num_epochs": 30001,
         "reg_amount": 1e0,
-        "replay_frac": 0.95,
+        "replay_frac": 0.98,
         "replay_size": 8192,
-        "sample_steps": 5,
-        "step_size": 1e1,
+        "sample_steps": 10,
+        "step_size": 1e-2,
         "noise_scale": 5e-3,
         "batch_size_max": 256,
         "lr": 1e-4,
+        "weight_decay": 1e-1,
         "identifier": identifier,
         "resume": False,
         # "resume_path": "2021-04-30_18h-39m-50s",
         # "resume_version": "checkpoints/model-75000"
     }
-
-    wandb.init(project='lapd-ebm', entity='phil', config=hyperparams)
 
     num_epochs = hyperparams["num_epochs"]
     reg_amount = hyperparams["reg_amount"]
@@ -156,6 +158,7 @@ if __name__ == "__main__":
     noise_scale = hyperparams["noise_scale"]
     batch_size_max = hyperparams["batch_size_max"]
     lr = hyperparams["lr"]
+    weight_decay = hyperparams["weight_decay"]
     resume = hyperparams["resume"]
     if resume:
         resume_path = hyperparams["resume_path"]
@@ -181,8 +184,9 @@ if __name__ == "__main__":
 
     dataloader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(data),
                                              batch_size=batch_size_max, shuffle=True,
-                                             num_workers=4, pin_memory=True)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.0, betas=(0.0, 0.999))
+                                             num_workers=2, pin_memory=True)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay,
+                                  betas=(0.0, 0.999))
     replay_buffer = ReplayBuffer(replay_size, np.random.randn(*data.shape))
 
     if resume:
@@ -200,6 +204,10 @@ if __name__ == "__main__":
 
     num_data = data.shape[0]
     num_batches = int(np.ceil(num_data / batch_size_max))
+
+    num_parameters = np.sum([p.numel() for p in model.parameters() if p.requires_grad])
+    hyperparams['num_parameters'] = num_parameters
+    wandb.init(project='lapd-ebm', entity='phil', config=hyperparams)
 
     pbar = tqdm(total=num_epochs)
     for epoch in range(num_epochs):
