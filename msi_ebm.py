@@ -21,8 +21,6 @@ def load_data(path):
     data_signals = data_signals[complete_data]
     data = torch.tensor(data_signals).float()
 
-    # NEED MEAN AND PTP ADJUSTMENT
-
     return data
 
 
@@ -77,64 +75,86 @@ class NeuralNet(torch.nn.Module):
 
         spec_norm = torch.nn.utils.spectral_norm
         ModuleList = torch.nn.ModuleList
+        f_num = 4
+        stride = 1
+        k_len = 16
+        pad = 8
+        pad_mode = 'replicate'
 
         # Conv model
-        self.I_conv = ModuleList([spec_norm(torch.nn.Conv1d(1, 8, 32, stride=1, padding=0)),
-                                  spec_norm(torch.nn.Conv1d(8, 8, 32, stride=1, padding=0))])
-        self.I_dense = ModuleList([spec_norm(torch.nn.Linear(8 * (256 - 31 - 31), 64)),
-                                   spec_norm(torch.nn.Linear(64, 32)),
-                                   spec_norm(torch.nn.Linear(32, 32)),
-                                   spec_norm(torch.nn.Linear(32, 32))])
+        self.I_conv = ModuleList([
+            spec_norm(torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+        self.I_dense = ModuleList([
+            spec_norm(torch.nn.Linear(f_num * (256), 32)),
+            spec_norm(torch.nn.Linear(32, 32))])
 
-        self.V_conv = ModuleList([spec_norm(torch.nn.Conv1d(1, 8, 32, stride=1, padding=0)),
-                                  spec_norm(torch.nn.Conv1d(8, 8, 32, stride=1, padding=0))])
-        self.V_dense = ModuleList([spec_norm(torch.nn.Linear(8 * (256 - 31 - 31), 64)),
-                                   spec_norm(torch.nn.Linear(64, 32)),
-                                   spec_norm(torch.nn.Linear(32, 32)),
-                                   spec_norm(torch.nn.Linear(32, 32))])
+        self.V_conv = ModuleList([
+            spec_norm(torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+        self.V_dense = ModuleList([
+            spec_norm(torch.nn.Linear(f_num * (256), 32)),
+            spec_norm(torch.nn.Linear(32, 32))])
 
-        self.n_conv = ModuleList([spec_norm(torch.nn.Conv1d(1, 8, 32, stride=1, padding=0)),
-                                  spec_norm(torch.nn.Conv1d(8, 8, 32, stride=1, padding=0))])
-        self.n_dense = ModuleList([spec_norm(torch.nn.Linear(8 * (256 - 31 - 31), 64)),
-                                   spec_norm(torch.nn.Linear(64, 32)),
-                                   spec_norm(torch.nn.Linear(32, 32)),
-                                   spec_norm(torch.nn.Linear(32, 32))])
+        self.n_conv = ModuleList([
+            spec_norm(torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+        self.n_dense = ModuleList([
+            spec_norm(torch.nn.Linear(f_num * (256), 32)),
+            spec_norm(torch.nn.Linear(32, 32))])
 
-        self.d0_conv = ModuleList([spec_norm(torch.nn.Conv1d(1, 8, 32, stride=1, padding=0)),
-                                   spec_norm(torch.nn.Conv1d(8, 8, 32, stride=1, padding=0))])
-        self.d0_dense = ModuleList([spec_norm(torch.nn.Linear(8 * (256 - 31 - 31), 64)),
-                                    spec_norm(torch.nn.Linear(64, 32)),
-                                    spec_norm(torch.nn.Linear(32, 32)),
-                                    spec_norm(torch.nn.Linear(32, 32))])
+        self.d0_conv = ModuleList([
+            spec_norm(torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+        self.d0_dense = ModuleList([
+            spec_norm(torch.nn.Linear(f_num * (256), 32)),
+            spec_norm(torch.nn.Linear(32, 32))])
 
-        self.d1_conv = ModuleList([spec_norm(torch.nn.Conv1d(1, 8, 32, stride=1, padding=0)),
-                                   spec_norm(torch.nn.Conv1d(8, 8, 32, stride=1, padding=0))])
-        self.d1_dense = ModuleList([spec_norm(torch.nn.Linear(8 * (256 - 31 - 31), 64)),
-                                    spec_norm(torch.nn.Linear(64, 32)),
-                                    spec_norm(torch.nn.Linear(32, 32)),
-                                    spec_norm(torch.nn.Linear(32, 32))])
+        self.d1_conv = ModuleList([
+            spec_norm(torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+        self.d1_dense = ModuleList([
+            spec_norm(torch.nn.Linear(f_num * (256), 32)),
+            spec_norm(torch.nn.Linear(32, 32))])
 
-        self.d2_conv = ModuleList([spec_norm(torch.nn.Conv1d(1, 8, 32, stride=1, padding=0)),
-                                   spec_norm(torch.nn.Conv1d(8, 8, 32, stride=1, padding=0))])
-        self.d2_dense = ModuleList([spec_norm(torch.nn.Linear(8 * (256 - 31 - 31), 64)),
-                                    spec_norm(torch.nn.Linear(64, 32)),
-                                    spec_norm(torch.nn.Linear(32, 32)),
-                                    spec_norm(torch.nn.Linear(32, 32))])
+        self.d2_conv = ModuleList([
+            spec_norm(torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+        self.d2_dense = ModuleList([
+            spec_norm(torch.nn.Linear(f_num * (256), 32)),
+            spec_norm(torch.nn.Linear(32, 32))])
 
-        self.B_conv = ModuleList([spec_norm(torch.nn.Conv1d(1, 8, 32, stride=1, padding=0)),
-                                  spec_norm(torch.nn.Conv1d(8, 8, 32, stride=1, padding=0))])
-        self.B_dense = ModuleList([spec_norm(torch.nn.Linear(8 * (128 - 31 - 31), 64)),
-                                   spec_norm(torch.nn.Linear(64, 32)),
-                                   spec_norm(torch.nn.Linear(32, 32)),
-                                   spec_norm(torch.nn.Linear(32, 32))])
+        self.B_conv = ModuleList([
+            spec_norm(torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+        self.B_dense = ModuleList([
+            spec_norm(torch.nn.Linear(f_num * (128), 32)),
+            spec_norm(torch.nn.Linear(32, 32))])
 
-        self.p_layers = ModuleList([spec_norm(torch.nn.Linear(51, 32)),
-                                    spec_norm(torch.nn.Linear(32, 32)),
-                                    spec_norm(torch.nn.Linear(32, 32))])
+        self.p_layers = ModuleList([
+            spec_norm(torch.nn.Linear(51, 32)),
+            spec_norm(torch.nn.Linear(32, 32)),
+            spec_norm(torch.nn.Linear(32, 32)),
+            spec_norm(torch.nn.Linear(32, 32))])
 
-        self.energy_layers = ModuleList([spec_norm(torch.nn.Linear(32 * 8, 32)),
-                                         spec_norm(torch.nn.Linear(32, 32)),
-                                         spec_norm(torch.nn.Linear(32, 32))])
+        self.energy_layers = ModuleList([
+            spec_norm(torch.nn.Linear(32 * 8, 32)),
+            spec_norm(torch.nn.Linear(32, 32)),
+            spec_norm(torch.nn.Linear(32, 32))])
         self.energy_final = torch.nn.Linear(32, 1)
 
     def forward(self, x):
@@ -153,43 +173,46 @@ class NeuralNet(torch.nn.Module):
         p_x = x[:, 1664:1664 + 51]  # don't need unsqueeze because no conv ops
 
         for layer in self.I_conv:
-            I_x = SiLU(layer(I_x))
+            # print(I_x.shape)
+            I_x = SiLU(layer(I_x))[:, :, 0:-1]
         I_x = (I_x).reshape(batch_size, -1)
+        # print('\n')
         for layer in self.I_dense:
+            # print(I_x.shape)
             I_x = SiLU(layer(I_x))
 
         for layer in self.V_conv:
-            V_x = SiLU(layer(V_x))
+            V_x = SiLU(layer(V_x))[:, :, 0:-1]
         V_x = (V_x).reshape(batch_size, -1)
         for layer in self.V_dense:
             V_x = SiLU(layer(V_x))
 
         for layer in self.n_conv:
-            n_x = SiLU(layer(n_x))
+            n_x = SiLU(layer(n_x))[:, :, 0:-1]
         n_x = (n_x).reshape(batch_size, -1)
         for layer in self.n_dense:
             n_x = SiLU(layer(n_x))
 
         for layer in self.d0_conv:
-            d0_x = SiLU(layer(d0_x))
+            d0_x = SiLU(layer(d0_x))[:, :, 0:-1]
         d0_x = (d0_x).reshape(batch_size, -1)
         for layer in self.d0_dense:
             d0_x = SiLU(layer(d0_x))
 
         for layer in self.d1_conv:
-            d1_x = SiLU(layer(d1_x))
+            d1_x = SiLU(layer(d1_x))[:, :, 0:-1]
         d1_x = (d1_x).reshape(batch_size, -1)
         for layer in self.d1_dense:
             d1_x = SiLU(layer(d1_x))
 
         for layer in self.d2_conv:
-            d2_x = SiLU(layer(d2_x))
+            d2_x = SiLU(layer(d2_x))[:, :, 0:-1]
         d2_x = (d2_x).reshape(batch_size, -1)
         for layer in self.d2_dense:
             d2_x = SiLU(layer(d2_x))
 
         for layer in self.B_conv:
-            B_x = SiLU(layer(B_x))
+            B_x = SiLU(layer(B_x))[:, :, 0:-1]
         B_x = (B_x).reshape(batch_size, -1)
         for layer in self.B_dense:
             B_x = SiLU(layer(B_x))
@@ -222,8 +245,8 @@ if __name__ == "__main__":
         "reg_amount": 1e0,
         "replay_frac": 0.98,
         "replay_size": 8192,
-        "sample_steps": 5,
-        "step_size": 1e-1,
+        "sample_steps": 10,
+        "step_size": 1e2,
         "noise_scale": 5e-3,
         "batch_size_max": 1024,
         "lr": 1e-4,
@@ -293,49 +316,58 @@ if __name__ == "__main__":
     print("Parameters: {}".format(num_parameters))
     hyperparams['num_parameters'] = num_parameters
     wandb.init(project="msi-ebm", entity='phil',
-               group="Simple_EBM", job_type="crash test",
+               group="Smaller Conv", job_type="mixed precision testing",
                config=hyperparams)
 
     pbar = tqdm(total=num_epochs)
     for epoch in range(num_epochs):
-        loss_avg = 0
-        reg_avg = 0
-        energy_pos_list = torch.zeros((num_data, 1)).cuda()
-        energy_neg_list = torch.zeros((num_data, 1)).cuda()
+        with torch.cuda.amp.autocast():
+            loss_avg = 0
+            reg_avg = 0
+            energy_pos_list = torch.zeros((num_data, 1)).cuda()
+            energy_neg_list = torch.zeros((num_data, 1)).cuda()
 
-        for pos_x, i in zip(dataloader, range(num_batches)):
-            optimizer.zero_grad()
-            pos_x = torch.Tensor(pos_x[0]).cuda()
-    #         pos_x = torch.Tensor(pos_x)
-            pos_x.requires_grad = True
-            batch_size = pos_x.shape[0]
+            for pos_x, i in zip(dataloader, range(num_batches)):
+                optimizer.zero_grad()
+                pos_x = torch.Tensor(pos_x[0]).cuda()
+        #         pos_x = torch.Tensor(pos_x)
+                pos_x.requires_grad = True
+                batch_size = pos_x.shape[0]
 
-            neg_x = replay_buffer.sample(int(batch_size * replay_frac))
-            neg_x_rand = torch.randn(batch_size - neg_x.shape[0], *list(pos_x.shape[1:])).cuda()
-            neg_x = torch.cat([neg_x, neg_x_rand], 0)
-            # neg_x = torch.Tensor(neg_x).cuda()
-    #         neg_x = torch.Tensor(neg_x)
-            neg_x.requires_grad = True
+                neg_x = replay_buffer.sample(int(batch_size * replay_frac))
+                neg_x_rand = torch.randn(batch_size - neg_x.shape[0], *list(pos_x.shape[1:])).cuda()
+                neg_x = torch.cat([neg_x, neg_x_rand], 0)
+                # neg_x = torch.Tensor(neg_x).cuda()
+        #         neg_x = torch.Tensor(neg_x)
+                neg_x.requires_grad = True
 
-            neg_x = sample_langevin_cuda(neg_x, model, sample_steps=sample_steps,
-                                         step_size=step_size, noise_scale=noise_scale)
-            replay_buffer.add(neg_x.detach())
-            neg_x = neg_x.detach()
+                neg_x = sample_langevin_cuda(neg_x, model, sample_steps=sample_steps,
+                                             step_size=step_size, noise_scale=noise_scale)
+                replay_buffer.add(neg_x.detach())
+                neg_x = neg_x.detach()
 
-            optimizer.zero_grad()
-            pos_energy = model(pos_x)
-            neg_energy = model(neg_x.cuda())
-    #         neg_energy = model(neg_x)
-            energy_regularization = reg_amount * (pos_energy.square() + neg_energy.square()).mean()
-            loss = (pos_energy - neg_energy).mean() + energy_regularization
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
-            optimizer.step()
+                optimizer.zero_grad()
+                pos_energy = model(pos_x)
+                neg_energy = model(neg_x.cuda())
+        #         neg_energy = model(neg_x)
+                energy_regularization = reg_amount * (pos_energy.square() + neg_energy.square()).mean()
+                loss = (pos_energy - neg_energy).mean() + energy_regularization
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
+                optimizer.step()
 
-            loss_avg += loss * batch_size / num_data
-            reg_avg += energy_regularization * batch_size / num_data
-            energy_pos_list[i * batch_size_max:i * batch_size_max + batch_size] = pos_energy
-            energy_neg_list[i * batch_size_max:i * batch_size_max + batch_size] = neg_energy
+                loss_avg += loss * batch_size / num_data
+                reg_avg += energy_regularization * batch_size / num_data
+
+                energy_pos_list[i * batch_size_max:i * batch_size_max + batch_size] = pos_energy
+                energy_neg_list[i * batch_size_max:i * batch_size_max + batch_size] = neg_energy
+
+                if i % 20 == 0:
+                    tqdm.write("Batch: {} // Loss: {:.3e} // Pos: {:.3e} // Neg: {:.3e} // "
+                               "Neg_relative: {:.3e}".format(i, loss.mean(), pos_energy.mean(),
+                                                             neg_energy.mean(),
+                                                             neg_energy.mean() - pos_energy.mean()))
+
 
         # scalars
         avg_energy_pos = energy_pos_list.mean()
