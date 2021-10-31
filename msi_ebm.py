@@ -81,7 +81,7 @@ def sample_langevin_KL_cuda(x, model, sample_steps=10, step_size=10, noise_scale
             # We're not going to detach so we retain the gradients
             x_KL = x - gradient * step_size
         x = (x - gradient * step_size).detach()  # Remove the gradients
-        
+
     return x, x_KL
 
 
@@ -333,9 +333,11 @@ if __name__ == "__main__":
             loss_avg = 0
             reg_avg = 0
             kl_loss_avg = 0
-            energy_pos_list = torch.zeros((num_data, 1)).cuda()
-            energy_neg_list = torch.zeros((num_data, 1)).cuda()
-            energy_kl_list = torch.zeros((num_data, 1)).cuda()
+
+            energy_list_size = batch_size_max * 4 if data.shape[0] > batch_size_max * 4 else data.shape[0]
+            energy_pos_list = torch.zeros((energy_list_size, 1)).cuda()
+            energy_neg_list = torch.zeros((energy_list_size, 1)).cuda()
+            energy_kl_list = torch.zeros((energy_list_size, 1)).cuda()
 
             batch_pbar = tqdm(total=num_batches)
             for pos_x, i in zip(dataloader, range(num_batches)):
@@ -345,7 +347,8 @@ if __name__ == "__main__":
                 batch_size = pos_x.shape[0]
 
                 neg_x = replay_buffer.sample(int(batch_size * replay_frac))
-                neg_x_rand = torch.randn(batch_size - neg_x.shape[0], *list(pos_x.shape[1:])).cuda()
+                neg_x_rand = (torch.rand(batch_size - neg_x.shape[0], *list(pos_x.shape[1:])) *
+                              2 - 1).cuda()
                 neg_x = torch.cat([neg_x, neg_x_rand], 0)
                 # neg_x = torch.Tensor(neg_x).cuda()
                 # neg_x = torch.Tensor(neg_x)
@@ -383,8 +386,7 @@ if __name__ == "__main__":
                 # neg_energy = model(neg_x)
                 energy_regularization = reg_amount * (pos_energy.square() + neg_energy.square()).mean()
 
-                loss = ((pos_energy - neg_energy).mean() + energy_regularization +
-                        kl_loss)
+                loss = ((pos_energy - neg_energy).mean() + energy_regularization + kl_loss)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
                 optimizer.step()
@@ -395,9 +397,11 @@ if __name__ == "__main__":
                 # print(reg_avg)
                 kl_loss_avg += kl_loss * batch_size / num_data
 
-                energy_pos_list[i * batch_size_max:i * batch_size_max + batch_size] = pos_energy.detach()
-                energy_neg_list[i * batch_size_max:i * batch_size_max + batch_size] = neg_energy.detach()
-                energy_kl_list[i * batch_size_max:i * batch_size_max + batch_size] = kl_energy.detach()
+                # Restricting size *dramatically* improves performance
+                if i < 4 and energy_list_size >= batch_size_max * i + batch_size:
+                    energy_pos_list[i * batch_size_max:i * batch_size_max + batch_size] = pos_energy.detach()
+                    energy_neg_list[i * batch_size_max:i * batch_size_max + batch_size] = neg_energy.detach()
+                    energy_kl_list[i * batch_size_max:i * batch_size_max + batch_size] = kl_energy.detach()
 
                 if i % 20 == 0:
                     tqdm.write("#: {} // L: {:.2e} // (+): {:.2e} // (-): {:.2e} // "
