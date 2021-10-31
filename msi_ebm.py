@@ -69,92 +69,108 @@ def sample_langevin_cuda(x, model, sample_steps=10, step_size=10, noise_scale=0.
     return x
 
 
+def sample_langevin_KL_cuda(x, model, sample_steps=10, step_size=10, noise_scale=0.005):
+    for i in range(sample_steps):
+        x.requires_grad_(True)  # So gradients are saved
+        noise = torch.randn_like(x) * noise_scale
+        model_output = model(x + noise)
+        # Only inputs so that only grad wrt x is calculated (and not all remaining vars)
+        gradient = torch.autograd.grad(model_output.sum(), x, only_inputs=True)[0]
+
+        if i == sample_steps - 1:
+            # We're not going to detach so we retain the gradients
+            x_KL = x - gradient * step_size
+        x = (x - gradient * step_size).detach()  # Remove the gradients
+        
+    return x, x_KL
+
+
 class NeuralNet(torch.nn.Module):
     def __init__(self):
         super(NeuralNet, self).__init__()
 
-        spec_norm = torch.nn.utils.spectral_norm
+        # spec_norm = torch.nn.utils.spectral_norm
         ModuleList = torch.nn.ModuleList
-        f_num = 4
+        f_num = 2
         stride = 1
-        k_len = 16
-        pad = 8
+        k_len = 8
+        pad = 4
         pad_mode = 'replicate'
 
         # Conv model
         self.I_conv = ModuleList([
-            spec_norm(torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+            (torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
         self.I_dense = ModuleList([
-            spec_norm(torch.nn.Linear(f_num * (256), 32)),
-            spec_norm(torch.nn.Linear(32, 32))])
+            (torch.nn.Linear(f_num * (256), 32)),
+            (torch.nn.Linear(32, 32))])
 
         self.V_conv = ModuleList([
-            spec_norm(torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+            (torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
         self.V_dense = ModuleList([
-            spec_norm(torch.nn.Linear(f_num * (256), 32)),
-            spec_norm(torch.nn.Linear(32, 32))])
+            (torch.nn.Linear(f_num * (256), 32)),
+            (torch.nn.Linear(32, 32))])
 
         self.n_conv = ModuleList([
-            spec_norm(torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+            (torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
         self.n_dense = ModuleList([
-            spec_norm(torch.nn.Linear(f_num * (256), 32)),
-            spec_norm(torch.nn.Linear(32, 32))])
+            (torch.nn.Linear(f_num * (256), 32)),
+            (torch.nn.Linear(32, 32))])
 
         self.d0_conv = ModuleList([
-            spec_norm(torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+            (torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
         self.d0_dense = ModuleList([
-            spec_norm(torch.nn.Linear(f_num * (256), 32)),
-            spec_norm(torch.nn.Linear(32, 32))])
+            (torch.nn.Linear(f_num * (256), 32)),
+            (torch.nn.Linear(32, 32))])
 
         self.d1_conv = ModuleList([
-            spec_norm(torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+            (torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
         self.d1_dense = ModuleList([
-            spec_norm(torch.nn.Linear(f_num * (256), 32)),
-            spec_norm(torch.nn.Linear(32, 32))])
+            (torch.nn.Linear(f_num * (256), 32)),
+            (torch.nn.Linear(32, 32))])
 
         self.d2_conv = ModuleList([
-            spec_norm(torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+            (torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
         self.d2_dense = ModuleList([
-            spec_norm(torch.nn.Linear(f_num * (256), 32)),
-            spec_norm(torch.nn.Linear(32, 32))])
+            (torch.nn.Linear(f_num * (256), 32)),
+            (torch.nn.Linear(32, 32))])
 
         self.B_conv = ModuleList([
-            spec_norm(torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            spec_norm(torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+            (torch.nn.Conv1d(1, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            (torch.nn.Conv1d(f_num, f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
         self.B_dense = ModuleList([
-            spec_norm(torch.nn.Linear(f_num * (128), 32)),
-            spec_norm(torch.nn.Linear(32, 32))])
+            (torch.nn.Linear(f_num * (128), 32)),
+            (torch.nn.Linear(32, 32))])
 
         self.p_layers = ModuleList([
-            spec_norm(torch.nn.Linear(51, 32)),
-            spec_norm(torch.nn.Linear(32, 32)),
-            spec_norm(torch.nn.Linear(32, 32)),
-            spec_norm(torch.nn.Linear(32, 32))])
+            (torch.nn.Linear(51, 32)),
+            (torch.nn.Linear(32, 32)),
+            (torch.nn.Linear(32, 32)),
+            (torch.nn.Linear(32, 32))])
 
         self.energy_layers = ModuleList([
-            spec_norm(torch.nn.Linear(32 * 8, 32)),
-            spec_norm(torch.nn.Linear(32, 32)),
-            spec_norm(torch.nn.Linear(32, 32))])
+            (torch.nn.Linear(32 * 8, 32)),
+            (torch.nn.Linear(32, 32)),
+            (torch.nn.Linear(32, 32))])
         self.energy_final = torch.nn.Linear(32, 1)
 
     def forward(self, x):
@@ -243,18 +259,20 @@ if __name__ == "__main__":
     hyperparams = {
         "num_epochs": 51,
         "reg_amount": 1e0,
-        "replay_frac": 0.98,
+        "replay_frac": 0.99,
         "replay_size": 8192,
         "sample_steps": 10,
         "step_size": 1e2,
         "noise_scale": 5e-3,
         "batch_size_max": 1024,
         "lr": 1e-4,
+        "kl_weight_energy": 1e0,
+        "kl_weight_entropy": 3e-1,
         "weight_decay": 1e-1,
         "identifier": identifier,
         "resume": False,
-        # "resume_path": "2021-04-30_18h-39m-50s",
-        # "resume_version": "checkpoints/model-75000"
+        # "resume_path": "2021-10-28_10h-15m-45s",
+        # "resume_version": "checkpoints/model-50"
     }
 
     num_epochs = hyperparams["num_epochs"]
@@ -266,6 +284,8 @@ if __name__ == "__main__":
     noise_scale = hyperparams["noise_scale"]
     batch_size_max = hyperparams["batch_size_max"]
     lr = hyperparams["lr"]
+    kl_weight_energy = hyperparams["kl_weight_energy"]
+    kl_weight_entropy = hyperparams["kl_weight_entropy"]
     weight_decay = hyperparams["weight_decay"]
     resume = hyperparams["resume"]
     if resume:
@@ -279,34 +299,22 @@ if __name__ == "__main__":
                                                       resume_path + "/" + project_name + "_copy.py")
         ebm = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(ebm)
-        # sample_langevin = ebm.sample_langevin
-        # sample_langevin_cuda = ebm.sample_langevin_cuda
-        # ReplayBuffer = ebm.ReplayBuffer
         model = ebm.NeuralNet().cuda()
 
     data_path = "data/data-MSI-hairpin_001.npz"
     data = load_data(data_path)
-
-    # writer.add_graph(model, data[0:1].cuda())
 
     dataloader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(data),
                                              batch_size=batch_size_max, shuffle=True,
                                              num_workers=2, pin_memory=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay,
                                   betas=(0.0, 0.999))
-    replay_buffer = ReplayBuffer(replay_size, torch.randn(*data.shape).cuda())
+    replay_buffer = ReplayBuffer(replay_size, torch.rand((replay_size, data.shape[1])).cuda() * 2 - 1)
 
     if resume:
-        # sample_langevin = lapd_ebm.sample_langevin
-        # sample_langevin_cuda = lapd_ebm.sample_langevin_cuda
-        # ReplayBuffer = lapd_ebm.ReplayBuffer
         ckpt = torch.load(exp_path + resume_path + "/" + resume_version + ".pt")
         model.load_state_dict(ckpt['model_state_dict'], strict=False)
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-        # data = torch.tensor(np.load("data/isat_downsampled_8_div3.npz")['arr_0'].reshape(-1, 10)).float()
-        # data = torch.tensor(np.load("data/isat_downsampled_8.npz")['arr_0'].reshape(-1, 10)).float()
-        # replay_buffer = ReplayBuffer(ckpt['replay_buffer_list'].shape[0],
-                                     # np.random.randn(*data.shape))
         replay_buffer.sample_list = ckpt['replay_buffer_list']
 
     num_data = data.shape[0]
@@ -316,7 +324,7 @@ if __name__ == "__main__":
     print("Parameters: {}".format(num_parameters))
     hyperparams['num_parameters'] = num_parameters
     wandb.init(project="msi-ebm", entity='phil',
-               group="Smaller Conv", job_type="mixed precision testing",
+               group="Even smaller conv", job_type="testing",
                config=hyperparams)
 
     pbar = tqdm(total=num_epochs)
@@ -324,13 +332,15 @@ if __name__ == "__main__":
         with torch.cuda.amp.autocast():
             loss_avg = 0
             reg_avg = 0
+            kl_loss_avg = 0
             energy_pos_list = torch.zeros((num_data, 1)).cuda()
             energy_neg_list = torch.zeros((num_data, 1)).cuda()
+            energy_kl_list = torch.zeros((num_data, 1)).cuda()
 
+            batch_pbar = tqdm(total=num_batches)
             for pos_x, i in zip(dataloader, range(num_batches)):
                 optimizer.zero_grad()
                 pos_x = torch.Tensor(pos_x[0]).cuda()
-        #         pos_x = torch.Tensor(pos_x)
                 pos_x.requires_grad = True
                 batch_size = pos_x.shape[0]
 
@@ -338,68 +348,103 @@ if __name__ == "__main__":
                 neg_x_rand = torch.randn(batch_size - neg_x.shape[0], *list(pos_x.shape[1:])).cuda()
                 neg_x = torch.cat([neg_x, neg_x_rand], 0)
                 # neg_x = torch.Tensor(neg_x).cuda()
-        #         neg_x = torch.Tensor(neg_x)
-                neg_x.requires_grad = True
+                # neg_x = torch.Tensor(neg_x)
+                # neg_x.requires_grad = True  # Needed if not using Langevin_KL sampling
 
-                neg_x = sample_langevin_cuda(neg_x, model, sample_steps=sample_steps,
-                                             step_size=step_size, noise_scale=noise_scale)
-                replay_buffer.add(neg_x.detach())
-                neg_x = neg_x.detach()
+                # Run Langevin dynamics on sample
+                neg_x, kl_x = sample_langevin_KL_cuda(neg_x, model, sample_steps=sample_steps,
+                                                      step_size=step_size, noise_scale=noise_scale)
 
+                # KL loss -- energy part
+                # Don't accumulate grads in the model parameters for the KL loss
+                model.requires_grad_(False)
+                kl_energy = model.forward(kl_x)
+                model.requires_grad_(True)
+                kl_loss = kl_energy.mean() * kl_weight_energy
+
+                # KL loss -- entropy part
+                # This uses a nearest-neighbor estimation of the entropy of Langevin'd samples
+                num_kl_samples = 128
+                kl_x = kl_x.view(batch_size, -1)
+                kl_samp = replay_buffer.sample(num_kl_samples).reshape(num_kl_samples, -1)
+                kl_entropy = kl_x[:, None, :] - kl_samp[None, :, :]
+                kl_entropy = torch.norm(kl_entropy, p=2, dim=-1)
+                kl_entropy = torch.min(kl_entropy, dim=1)[0]  # Min returns a tuple
+                kl_entropy = -torch.log(kl_entropy + 1e-8).mean()  # Technically missing + ln(2) + C_E
+                kl_loss += kl_entropy * kl_weight_entropy
+
+                # Add samples to replay buffer *after* we sample from it to avoid 0 distances
+                replay_buffer.add(neg_x)  # neg_x already detached in Langevin call above
+
+                # Backwards pass...
                 optimizer.zero_grad()
                 pos_energy = model(pos_x)
                 neg_energy = model(neg_x.cuda())
-        #         neg_energy = model(neg_x)
+                # neg_energy = model(neg_x)
                 energy_regularization = reg_amount * (pos_energy.square() + neg_energy.square()).mean()
-                loss = (pos_energy - neg_energy).mean() + energy_regularization
+
+                loss = ((pos_energy - neg_energy).mean() + energy_regularization +
+                        kl_loss)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
                 optimizer.step()
 
                 loss_avg += loss * batch_size / num_data
                 reg_avg += energy_regularization * batch_size / num_data
+                # print("\n")
+                # print(reg_avg)
+                kl_loss_avg += kl_loss * batch_size / num_data
 
-                energy_pos_list[i * batch_size_max:i * batch_size_max + batch_size] = pos_energy
-                energy_neg_list[i * batch_size_max:i * batch_size_max + batch_size] = neg_energy
+                energy_pos_list[i * batch_size_max:i * batch_size_max + batch_size] = pos_energy.detach()
+                energy_neg_list[i * batch_size_max:i * batch_size_max + batch_size] = neg_energy.detach()
+                energy_kl_list[i * batch_size_max:i * batch_size_max + batch_size] = kl_energy.detach()
 
                 if i % 20 == 0:
-                    tqdm.write("Batch: {} // Loss: {:.3e} // Pos: {:.3e} // Neg: {:.3e} // "
-                               "Neg_relative: {:.3e}".format(i, loss.mean(), pos_energy.mean(),
-                                                             neg_energy.mean(),
-                                                             neg_energy.mean() - pos_energy.mean()))
-
+                    tqdm.write("#: {} // L: {:.2e} // (+): {:.2e} // (-): {:.2e} // "
+                               "(-)-(+): {:.2e}".format(i, loss.mean(), pos_energy.mean(),
+                                                        neg_energy.mean(),
+                                                        neg_energy.mean() - pos_energy.mean()))
+                batch_pbar.update(1)
+            batch_pbar.close()
 
         # scalars
         avg_energy_pos = energy_pos_list.mean()
         avg_energy_neg = energy_neg_list.mean()
+        avg_energy_kl = energy_kl_list.mean()
 
         # histograms
         energy_pos_list -= avg_energy_pos
         energy_neg_list -= avg_energy_pos
+        energy_kl_list -= avg_energy_kl
 
         # write scalars and histograms
-        writer.add_scalar("energy/loss", loss_avg, epoch)
+        writer.add_scalar("loss/total", loss_avg, epoch)
         writer.add_scalar('energy/reg', reg_avg, epoch)
         writer.add_scalar("energy/positive", avg_energy_pos, epoch)
         writer.add_scalar("energy/negative", avg_energy_neg, epoch)
         writer.add_scalar("energy/negative_relative", avg_energy_neg - avg_energy_pos, epoch)
-        wandb.log({"energy/loss": loss_avg,
+        writer.add_scalar("energy/kl_energy", avg_energy_kl, epoch)
+        writer.add_scalar("loss/kl_loss", kl_loss_avg, epoch)
+        wandb.log({"loss/total": loss_avg,
                    "energy/reg": reg_avg,
                    "energy/positive": avg_energy_pos,
                    "energy/negative": avg_energy_neg,
-                   "energy/negative_relative": avg_energy_neg - avg_energy_pos})
+                   "energy/negative_relative": avg_energy_neg - avg_energy_pos,
+                   "energy/kl_energy": avg_energy_kl,
+                   "loss/kl_loss": kl_loss_avg})
 
         if epoch % 5 == 0 or epoch == num_epochs - 1:
             writer.add_histogram("energy/pos_relative", energy_pos_list, epoch)
             writer.add_histogram("energy/neg_relative", energy_neg_list, epoch)
+            writer.add_histogram("energy_kl_list", energy_kl_list, epoch)
             for name, weight in model.named_parameters():
                 writer.add_histogram("w/" + name, weight, epoch)
                 writer.add_histogram(f'g/{name}.grad', weight.grad, epoch)
             writer.flush()
-            tqdm.write("Epoch: {} // Loss: {:.3e} // Pos: {:.3e} // Neg: {:.3e} // "
-                       "Neg_relative: {:.3e}".format(epoch, loss_avg, avg_energy_pos,
-                                                     avg_energy_neg,
-                                                     avg_energy_neg - avg_energy_pos))
+            tqdm.write("E: {} // L: {:.2e} // (+): {:.2e} // (-): {:.2e} // "
+                       "(-)-(+): {:.2e}".format(epoch, loss_avg, avg_energy_pos,
+                                                avg_energy_neg,
+                                                avg_energy_neg - avg_energy_pos))
 
         if epoch % 25 == 0 or epoch == num_epochs - 1:
             torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(),
