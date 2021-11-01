@@ -85,13 +85,22 @@ def sample_langevin_KL_cuda(x, model, sample_steps=10, step_size=10, noise_scale
     return x, x_KL
 
 
+def perturb_samples(samples):
+    # Constants chosen because they made sense on 10/31/2021
+    rand_gaussian = torch.randn_like(samples) * 0.2
+    rand_mulitplier = torch.rand_like(samples[:, 0])[:, None] * 1.0 + 0.5
+
+    # Not sure what the order of operations should be here
+    return samples * rand_mulitplier + rand_gaussian
+
+
 class NeuralNet(torch.nn.Module):
     def __init__(self):
         super(NeuralNet, self).__init__()
 
         # spec_norm = torch.nn.utils.spectral_norm
         ModuleList = torch.nn.ModuleList
-        f_num = 4
+        f_num = 8
         stride = 1
         k_len = 32
         pad = 0
@@ -100,62 +109,68 @@ class NeuralNet(torch.nn.Module):
         # Conv model
         self.I_conv = ModuleList([
             (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            # (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            # (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
             (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
         self.I_dense = ModuleList([
+            (torch.nn.LazyLinear(32)),
             (torch.nn.LazyLinear(32)),
             (torch.nn.LazyLinear(32))])
 
         self.V_conv = ModuleList([
             (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            # (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            # (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
             (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
         self.V_dense = ModuleList([
+            (torch.nn.LazyLinear(32)),
             (torch.nn.LazyLinear(32)),
             (torch.nn.LazyLinear(32))])
 
         self.n_conv = ModuleList([
             (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            # (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            # (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
             (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
         self.n_dense = ModuleList([
+            (torch.nn.LazyLinear(32)),
             (torch.nn.LazyLinear(32)),
             (torch.nn.LazyLinear(32))])
 
         self.d0_conv = ModuleList([
             (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            # (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            # (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
             (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
         self.d0_dense = ModuleList([
             (torch.nn.LazyLinear(32)),
+            (torch.nn.LazyLinear(32)),
             (torch.nn.LazyLinear(32))])
 
-        # self.d1_conv = ModuleList([
+        self.d1_conv = ModuleList([
+            (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
         #     (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
         #     (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-        #     (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-        #     (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
-        # self.d1_dense = ModuleList([
-        #     (torch.nn.LazyLinear(32)),
-        #     (torch.nn.LazyLinear(32))])
+            (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+        self.d1_dense = ModuleList([
+            (torch.nn.LazyLinear(32)),
+            (torch.nn.LazyLinear(32)),
+            (torch.nn.LazyLinear(32))])
 
-        # self.d2_conv = ModuleList([
+        self.d2_conv = ModuleList([
+            (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
         #     (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
         #     (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-        #     (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-        #     (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
-        # self.d2_dense = ModuleList([
-        #     (torch.nn.LazyLinear(32)),
-        #     (torch.nn.LazyLinear(32))])
+            (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+        self.d2_dense = ModuleList([
+            (torch.nn.LazyLinear(32)),
+            (torch.nn.LazyLinear(32)),
+            (torch.nn.LazyLinear(32))])
 
         self.B_conv = ModuleList([
             (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            # (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
+            # (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
             (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
         self.B_dense = ModuleList([
             (torch.nn.LazyLinear(32)),
@@ -189,12 +204,9 @@ class NeuralNet(torch.nn.Module):
         p_x = x[:, 1664:1664 + 51]  # don't need unsqueeze because no conv ops
 
         for layer in self.I_conv:
-            # print(I_x.shape)
             I_x = SiLU(layer(I_x))
         I_x = (I_x).reshape(batch_size, -1)
-        # print('\n')
         for layer in self.I_dense:
-            # print(I_x.shape)
             I_x = SiLU(layer(I_x))
 
         for layer in self.V_conv:
@@ -215,16 +227,16 @@ class NeuralNet(torch.nn.Module):
         for layer in self.d0_dense:
             d0_x = SiLU(layer(d0_x))
 
-        for layer in self.d0_conv:
+        for layer in self.d1_conv:
             d1_x = SiLU(layer(d1_x))
         d1_x = (d1_x).reshape(batch_size, -1)
-        for layer in self.d0_dense:
+        for layer in self.d1_dense:
             d1_x = SiLU(layer(d1_x))
 
-        for layer in self.d0_conv:
+        for layer in self.d2_conv:
             d2_x = SiLU(layer(d2_x))
         d2_x = (d2_x).reshape(batch_size, -1)
-        for layer in self.d0_dense:
+        for layer in self.d2_dense:
             d2_x = SiLU(layer(d2_x))
 
         for layer in self.B_conv:
@@ -262,9 +274,10 @@ if __name__ == "__main__":
         "replay_frac": 0.99,
         "replay_size": 8192,
 
-        "sample_steps": 10,
+        "sample_steps": 50,
         "step_size": 1e2,
         "noise_scale": 5e-3,
+        "augment_data": True,
 
         "batch_size_max": 1024,
         "lr": 1e-4,
@@ -284,6 +297,7 @@ if __name__ == "__main__":
     sample_steps = hyperparams["sample_steps"]
     step_size = hyperparams["step_size"]
     noise_scale = hyperparams["noise_scale"]
+    augment_data = hyperparams["augment_data"]
     batch_size_max = hyperparams["batch_size_max"]
     lr = hyperparams["lr"]
     kl_weight_energy = hyperparams["kl_weight_energy"]
@@ -303,7 +317,7 @@ if __name__ == "__main__":
         spec.loader.exec_module(ebm)
         model = ebm.NeuralNet().cuda()
 
-    data_path = "data/data-MSI-hairpin_001.npz"
+    data_path = "data/data-MSI-hairpin_001-train.npz"
     data = load_data(data_path)
 
     dataloader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(data),
@@ -323,15 +337,16 @@ if __name__ == "__main__":
     num_batches = int(np.ceil(num_data / batch_size_max))
 
     # initialze for lazy layers so that the num_parameters works properly
-    model.forward(torch.zeros((2, 1715)).cuda())
+    model(torch.zeros((2, 1715)).cuda())
     num_parameters = np.sum([p.numel() for p in model.parameters() if p.requires_grad])
     print("Parameters: {}".format(num_parameters))
     hyperparams['num_parameters'] = num_parameters
     wandb.init(project="msi-ebm", entity='phil',
-               group="Lazy conv", job_type="testing",
+               group="Copy of green dot", job_type="data augmentation test",
                config=hyperparams)
 
     pbar = tqdm(total=num_epochs)
+    batch_iteration = 0
     for epoch in range(num_epochs):
         # with torch.cuda.amp.autocast():
         loss_avg = 0
@@ -351,6 +366,8 @@ if __name__ == "__main__":
             batch_size = pos_x.shape[0]
 
             neg_x = replay_buffer.sample(int(batch_size * replay_frac))
+            if augment_data:
+                neg_x = perturb_samples(neg_x)
             neg_x_rand = (torch.rand(batch_size - neg_x.shape[0], *list(pos_x.shape[1:])) *
                           2 - 1).cuda()
             neg_x = torch.cat([neg_x, neg_x_rand], 0)
@@ -358,30 +375,30 @@ if __name__ == "__main__":
             # neg_x = torch.Tensor(neg_x)
             # neg_x.requires_grad = True  # Needed if not using Langevin_KL sampling
 
+            # For calculating the KL loss later
+            num_kl_samples = 256
+            kl_samp = replay_buffer.sample(num_kl_samples)
+
             # Run Langevin dynamics on sample
             neg_x, kl_x = sample_langevin_KL_cuda(neg_x, model, sample_steps=sample_steps,
                                                   step_size=step_size, noise_scale=noise_scale)
+            replay_buffer.add(neg_x)  # neg_x already detached in Langevin call above
 
             # KL loss -- energy part
             # Don't accumulate grads in the model parameters for the KL loss
             model.requires_grad_(False)
-            kl_energy = model.forward(kl_x)
+            kl_energy = model(kl_x)
             model.requires_grad_(True)
             kl_loss = kl_energy.mean() * kl_weight_energy
 
             # KL loss -- entropy part
             # This uses a nearest-neighbor estimation of the entropy of Langevin'd samples
-            num_kl_samples = 128
             kl_x = kl_x.view(batch_size, -1)
-            kl_samp = replay_buffer.sample(num_kl_samples)  # .reshape(num_kl_samples, -1)
             kl_entropy = kl_x[:, None, :] - kl_samp[None, :, :]
             kl_entropy = torch.norm(kl_entropy, p=2, dim=2)
             kl_entropy = torch.min(kl_entropy, dim=1)[0]  # Min returns a tuple
             kl_entropy = -torch.log(kl_entropy + 1e-8).mean()  # Technically missing + ln(2) + C_E
             kl_loss += kl_entropy * kl_weight_entropy
-
-            # Add samples to replay buffer *after* we sample from it to avoid 0 distances
-            replay_buffer.add(neg_x)  # neg_x already detached in Langevin call above
 
             # Backwards pass...
             optimizer.zero_grad()
@@ -401,19 +418,37 @@ if __name__ == "__main__":
             # print(reg_avg)
             kl_loss_avg += kl_loss.detach() * batch_size / num_data
 
+            pos_energy = pos_energy.detach()
+            neg_energy = neg_energy.detach()
+            kl_energy = kl_energy.detach()
+            kl_loss = kl_loss.detach()
+            loss = loss.detach()
+            energy_regularization = energy_regularization.detach()
+
             # Restricting size *dramatically* improves performance
             if i < 4 and energy_list_size >= batch_size_max * i + batch_size:
-                energy_pos_list[i * batch_size_max:i * batch_size_max + batch_size] = pos_energy.detach()
-                energy_neg_list[i * batch_size_max:i * batch_size_max + batch_size] = neg_energy.detach()
-                energy_kl_list[i * batch_size_max:i * batch_size_max + batch_size] = kl_energy.detach()
+                energy_pos_list[i * batch_size_max:i * batch_size_max + batch_size] = pos_energy
+                energy_neg_list[i * batch_size_max:i * batch_size_max + batch_size] = neg_energy
+                energy_kl_list[i * batch_size_max:i * batch_size_max + batch_size] = kl_energy
 
-            # TODO
-            # I should really detach the values below before adding them. Also log to wandb
+            pos_energy = pos_energy.mean()
+            neg_energy = neg_energy.mean()
+            kl_energy = kl_energy.mean()
             if i % 20 == 0:
                 tqdm.write("#: {} // L: {:.2e} // (+): {:.2e} // (-): {:.2e} // "
-                           "(-)-(+): {:.2e}".format(i, loss.mean(), pos_energy.mean(),
-                                                    neg_energy.mean(),
-                                                    neg_energy.mean() - pos_energy.mean()))
+                           "(-)-(+): {:.2e}".format(i, loss, pos_energy,
+                                                    neg_energy,
+                                                    neg_energy - pos_energy))
+            wandb.log({"loss/total": loss,
+                       "energy/reg": energy_regularization,
+                       "energy/positive": pos_energy,
+                       "energy/negative": neg_energy,
+                       "energy/negative_relative": neg_energy - pos_energy,
+                       "energy/kl_energy": kl_energy,
+                       "loss/kl_loss": kl_loss,
+                       "batch_num": batch_iteration,
+                       "epoch": epoch})
+            batch_iteration += 1
             batch_pbar.update(1)
         batch_pbar.close()
 
@@ -441,7 +476,8 @@ if __name__ == "__main__":
                    "energy/negative": avg_energy_neg,
                    "energy/negative_relative": avg_energy_neg - avg_energy_pos,
                    "energy/kl_energy": avg_energy_kl,
-                   "loss/kl_loss": kl_loss_avg})
+                   "loss/kl_loss": kl_loss_avg,
+                   "epoch": epoch})
 
         if epoch % 5 == 0 or epoch == num_epochs - 1:
             writer.add_histogram("energy/pos_relative", energy_pos_list, epoch)
