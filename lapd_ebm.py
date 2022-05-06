@@ -127,7 +127,7 @@ class NeuralNet(torch.nn.Module):
 
 if __name__ == "__main__":
     identifier = datetime.datetime.now().strftime('%Y-%m-%d_%Hh-%Mm-%Ss')
-    path = "experiments/" + identifier
+    path = "experiments_atc/" + identifier
     os.mkdir(path)
     os.mkdir(path + "/checkpoints")
     shutil.copy("lapd_ebm.py", path + "/lapd_ebm_copy.py")
@@ -167,7 +167,7 @@ if __name__ == "__main__":
     writer = SummaryWriter(log_dir=path)
     model = NeuralNet().cuda()
     if resume:
-        spec = importlib.util.spec_from_file_location("lapd_ebm_copy", "experiments/" +
+        spec = importlib.util.spec_from_file_location("lapd_ebm_copy", "experiments_atc/" +
                                                       resume_path + "/lapd_ebm_copy.py")
         lapd_ebm = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(lapd_ebm)
@@ -193,7 +193,7 @@ if __name__ == "__main__":
         # sample_langevin = lapd_ebm.sample_langevin
         # sample_langevin_cuda = lapd_ebm.sample_langevin_cuda
         # ReplayBuffer = lapd_ebm.ReplayBuffer
-        ckpt = torch.load("experiments/" + resume_path + "/" + resume_version + ".pt")
+        ckpt = torch.load("experiments_atc/" + resume_path + "/" + resume_version + ".pt")
         model.load_state_dict(ckpt['model_state_dict'], strict=False)
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         # data = torch.tensor(np.load("data/isat_downsampled_8_div3.npz")['arr_0'].reshape(-1, 10)).float()
