@@ -68,8 +68,38 @@ experiments_dir = "/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi"
 
 # filepaths = filepaths[133:]
 filepaths = [
-#             '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-02-25_17h-06m-25s/checkpoints/model-0.pt',
-            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-15_17h-04m-48s/checkpoints/model-20.pt']
+            # '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-0.pt',
+            # '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-10.pt',
+            # '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-20.pt',
+            # '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-30.pt',
+            # '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-40.pt',
+            # '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-50.pt',
+            # '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-60.pt',
+            # '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-70.pt'
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-80.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-90.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-100.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-110.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-120.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-130.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-140.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-150.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-160.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-170.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-180.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-190.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-200.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-210.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-220.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-230.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-240.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-250.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-260.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-270.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-280.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-290.pt',
+            '/home/phil/Desktop/EBMs/lapd-ebm/experiments_msi/2022-03-31_16h-40m-04s/checkpoints/model-300.pt'
+            ]
 
 for f in filepaths:
     try:
@@ -135,7 +165,7 @@ for f in filepaths:
         print("Unconditional sampling...")
 
         n_samp = 256
-        steps = sample_steps
+        steps = sample_steps * 2
         step_size = step_size
         noise = noise_scale
 
@@ -198,7 +228,7 @@ for f in filepaths:
             data_samps_mean = np.mean(data_sub_samps, axis=0)
             # data_samps_std = np.std(data_sub_samps, axis=0)
 
-            fig, axes = plt.subplots(4, 2, figsize=(8, 7))
+            fig, axes = plt.subplots(4, 2, figsize=(8, 7), dpi=200)
 
             for ax in axes.flatten():
                 ax.set_autoscale_on(False)
@@ -261,7 +291,7 @@ for f in filepaths:
 
         def plot_energy_histogram(data_samps):
             n_bins = 201
-            fig, axes = plt.subplots(1, 1, figsize=(8, 6))
+            fig, axes = plt.subplots(1, 1, figsize=(8, 6), dpi=200)
             plt.title('Energy histogram')
             axes.hist(model(data[np.random.randint(0, data.shape[0], 2000)].to(device)).to('cpu').detach().numpy(),
                       bins=n_bins, density=True, color=data_color)
@@ -275,7 +305,7 @@ for f in filepaths:
 
         def plot_diagnostics_histogram(data_samps):
             n_bins = 200
-            fig, axes = plt.subplots(4, 2, figsize=(8, 7))
+            fig, axes = plt.subplots(4, 2, figsize=(8, 7), dpi=200)
             axes[0, 0].hist(np.mean(data[:, 256 * 0:256 * 1].detach().numpy()[:, 133:183], axis=1) * ptp[0] + mean[0], bins=n_bins, density=True, color=data_color)
             axes[0, 1].hist(np.mean(data[:, 256 * 1:256 * 2].detach().numpy()[:, 133:183], axis=1) * ptp[1] + mean[1], bins=n_bins, density=True, color=data_color)
             axes[1, 0].hist(np.mean(data[:, 256 * 2:256 * 3].detach().numpy()[:, 133:183], axis=1) * ptp[2] + mean[2], bins=n_bins, density=True, color=data_color)
@@ -334,7 +364,7 @@ for f in filepaths:
         data_samps_mean = np.mean(data_sub_samps, axis=0)
         data_samps_std = np.std(data_sub_samps, axis=0)
         idx = np.random.randint(0, data_samps.shape[0])
-        fig, axes = plt.subplots(2, 1, figsize=(5, 5), sharex=True)
+        fig, axes = plt.subplots(2, 1, figsize=(5, 5), dpi=200, sharex=True)
 
         for i in range(data_sub_samps.shape[0]):
             axes[0].plot(xrange, data_sub_samps[i] * ptp[5] + mean[5], color=colors[-1], label="Sampled" if i == 0 else None)
@@ -354,5 +384,6 @@ for f in filepaths:
         plot_energy_histogram(data_samps)
         plt.savefig("experiments_msi/" + model_path + "/energies-single-" + model_num + ".png")
         plt.close('all')
-    except:
+    except Exception as e:
         print("Generating plots failed for " + f)
+        print(e, e.args)
