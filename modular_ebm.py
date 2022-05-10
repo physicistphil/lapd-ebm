@@ -10,6 +10,9 @@ import datetime
 import shutil
 import importlib
 
+from modular_ebm_diagnostics import *
+from modular_ebm_sampling import *
+
 
 def load_data(path):
     data_signals = np.load(path)['signals']
@@ -24,86 +27,9 @@ def load_data(path):
     return data
 
 
-class ReplayBuffer():
-    def __init__(self, max_size, init_data):
-        self.sample_list = init_data
-        self.max_size = max_size
-
-    # This starts populated with noise and then is eventually replaced with generated samples
-    def add(self, samples):
-        self.sample_list = torch.cat([self.sample_list, samples], 0)
-        buffer_len = self.sample_list.shape[0]
-        if buffer_len > self.max_size:
-            self.sample_list = self.sample_list[buffer_len - self.max_size:]
-
-    def sample(self, num_samples):
-        buffer_len = self.sample_list.shape[0]
-        indicies = torch.randint(0, buffer_len,
-                                 (num_samples if buffer_len > num_samples else buffer_len,))
-        return self.sample_list[indicies]
-
-
-def sample_langevin(x, model, sample_steps=10, step_size=10, noise_scale=0.005, return_list=False):
-    sample_list = []
-    sample_list.append(x.detach())
-    for _ in range(sample_steps):
-        noise = torch.randn_like(x) * noise_scale
-        model_output = model(x + noise)
-        # Only inputs so that only grad wrt x is calculated (and not all remaining vars)
-        gradient = torch.autograd.grad(model_output.sum(), x, only_inputs=True)[0]
-        x = x - gradient * step_size
-        sample_list.append(x.detach().cpu())
-    if return_list:
-        return sample_list
-    else:
-        return sample_list[-1]
-
-
-def sample_langevin_cuda(x, model, sample_steps=10, step_size=10, noise_scale=0.005):
-    for _ in range(sample_steps):
-        noise = torch.randn_like(x) * noise_scale
-        model_output = model(x + noise)
-        # Only inputs so that only grad wrt x is calculated (and not all remaining vars)
-        gradient = torch.autograd.grad(model_output.sum(), x, only_inputs=True)[0]
-        x = x - gradient * step_size
-    return x
-
-
-def sample_langevin_KL_cuda(x, model, sample_steps=10, kl_backprop_steps=5, step_size=10, noise_scale=0.005):
-    for i in range(sample_steps):
-        x.requires_grad_(True)  # So gradients are saved
-        noise = torch.randn_like(x) * noise_scale
-        model_output = model(x + noise)
-        # Only inputs so that only grad wrt x is calculated (and not all remaining vars)
-        gradient = torch.autograd.grad(model_output.sum(), x, only_inputs=True)[0]
-
-        # Backpropping through 5 steps
-        # kl_backprop_steps = 5
-        if i == sample_steps - kl_backprop_steps:
-            x_KL = x
-        if i >= sample_steps - kl_backprop_steps:
-            # We're not going to detach so we retain the gradients
-            kl_model_output = model(x_KL + noise)
-            kl_gradient = torch.autograd.grad(kl_model_output.sum(), x_KL,
-                                              only_inputs=True, create_graph=True)[0]
-            x_KL = x_KL - kl_gradient * step_size
-        x = (x - gradient * step_size).detach()  # Remove the gradients
-
-    return x, x_KL
-
-
-def perturb_samples(samples):
-    # Constants chosen because they made sense on 11/1/2021
-    rand_gaussian = torch.randn_like(samples) * 0.2
-    rand_mulitplier = torch.rand_like(samples[:, 0])[:, None] * 1.0 + 0.5
-
-    # Not sure what the order of operations should be here
-    return samples * rand_mulitplier + rand_gaussian
-
-
-class NeuralNet(torch.nn.Module):
+class ModularWithRNNBackbone(torch.nn.Module):
     def __init__(self):
-        super(NeuralNet, self).__init__()
+        super(ModularWithRNNBackbone, self).__init__()
 
         # spec_norm = torch.nn.utils.spectral_norm
         ModuleList = torch.nn.ModuleList
@@ -112,10 +38,8 @@ class NeuralNet(torch.nn.Module):
         self.I_conv = ModuleList([
             (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
             (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
-        
 
     def forward(self, x):
-        
         return x
 
 
