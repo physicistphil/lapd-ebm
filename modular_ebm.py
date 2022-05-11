@@ -31,29 +31,79 @@ class ModularWithRNNBackbone(torch.nn.Module):
     def __init__(self):
         super(ModularWithRNNBackbone, self).__init__()
 
-        # spec_norm = torch.nn.utils.spectral_norm
-        ModuleList = torch.nn.ModuleList
+        seq_length = 256
 
-        # Conv model
-        self.I_conv = ModuleList([
-            (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode)),
-            (torch.nn.LazyConv1d(f_num, k_len, stride=stride, padding=pad, padding_mode=pad_mode))])
+        # seq_length, num_msi_attn, num_mem_attn, num_sum_attn
+        self.dishargeI = MSITimeSeriesModule(seq_length, 1, 1, 1).cuda()
+        self.dishargeV = MSITimeSeriesModule(seq_length, 1, 1, 1).cuda()
+        self.interferometer = MSITimeSeriesModule(seq_length, 1, 1, 1).cuda()
+        self.diodes = MSITimeSeriesModule(seq_length, 1, 1, 1).cuda()
+        self.magnets = MagneticFieldModule(seq_length, 1, 1, 1).cuda()
+        self.RGA = RGAPressureModule(seq_length, 1, 1, 1).cuda()
+
+        embed_dim = 16
+        num_heads = 4
+        num_hidden = 128
+        num_attn = 2
+
+        self.seqPosEnc = SequencePositionalEncoding(embed_dim, seq_length).cuda()
+        self.attnBlocks = torch.nn.ModuleList([
+            ResidualAttnBlock(embed_dim, num_heads, num_hidden).cuda()
+            for i in range(num_attn)])
+
+        self.softmax = torch.nn.Softmax()
+        self.linear = torch.nn.LazyLinear(1)
 
     def forward(self, x):
-        return x
+        iterations = 1
+
+        I_x = x[:, 256 * 0:256 * 1]
+        V_x = x[:, 256 * 1:256 * 2]
+        n_x = x[:, 256 * 2:256 * 3]
+        d0_x = x[:, 256 * 3:256 * 4]
+        d1_x = x[:, 256 * 4:256 * 5]
+        d2_x = x[:, 256 * 5:256 * 6]
+        B_x = x[:, 1536:1536 + 128]
+        p_x = x[:, 1664:1664 + 51]
+
+        batch_size = I_x.shape[0]
+
+        shared_memory = torch.zeros((batch_size, 256, 16)).cuda()
+        for i in range(iterations):
+            # shuffle this order?
+            shared_memory += self.dishargeI(I_x, shared_memory)
+            shared_memory += self.dishargeV(V_x, shared_memory)
+            shared_memory += self.interferometer(n_x, shared_memory)
+            shared_memory += self.diodes(d0_x, shared_memory)
+            shared_memory += self.diodes(d1_x, shared_memory)
+            shared_memory += self.diodes(d2_x, shared_memory)
+            shared_memory += self.magnets(B_x, shared_memory)
+            shared_memory += self.RGA(p_x, shared_memory)
+
+        shared_memory = self.seqPosEnc(shared_memory)
+
+        for i, block in enumerate(self.attnBlocks):
+            shared_memory = block(shared_memory)
+
+        shared_memory = self.softmax(shared_memory)
+        shared_memory = self.linear(shared_memory.reshape(batch_size, -1))
+
+        return shared_memory
 
 
 if __name__ == "__main__":
     identifier = datetime.datetime.now().strftime('%Y-%m-%d_%Hh-%Mm-%Ss')
-    project_name = "msi_ebm"
-    exp_path = "experiments_msi/"
+    project_name = "modular_ebm"
+    exp_path = "experiments_modular/"
     path = exp_path + identifier
     os.mkdir(path)
     os.mkdir(path + "/checkpoints")
     shutil.copy(project_name + ".py", path + "/" + project_name + "_copy.py")
+    shutil.copy(project_name + "_sampling.py", path + "/" + project_name + "sampling_copy.py")
+    shutil.copy(project_name + "_diagnostics.py", path + "/" + project_name + "diagnostics_copy.py")
 
     hyperparams = {
-        "num_epochs": 301,
+        "num_epochs": 51,
         "reg_amount": 1e0,
         "replay_frac": 0.99,
         "replay_size": 8192,
@@ -63,7 +113,7 @@ if __name__ == "__main__":
         "noise_scale": 5e-3,
         "augment_data": True,
 
-        "batch_size_max": 1024,
+        "batch_size_max": 16,
         "lr": 1e-4,
 
         "kl_weight_energy": 1e-1,
@@ -96,13 +146,13 @@ if __name__ == "__main__":
         resume_version = hyperparams["resume_version"]
 
     writer = SummaryWriter(log_dir=path)
-    model = NeuralNet().cuda()
+    model = ModularWithRNNBackbone().cuda()
     if resume:
         spec = importlib.util.spec_from_file_location(project_name + "_copy", exp_path +
                                                       resume_path + "/" + project_name + "_copy.py")
         ebm = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(ebm)
-        model = ebm.NeuralNet().cuda()
+        model = ebm.ModularWithRNNBackbone().cuda()
 
     data_path = "data/data-MSI-hairpin_002-train.npz"
     data = load_data(data_path)
@@ -128,8 +178,8 @@ if __name__ == "__main__":
     num_parameters = np.sum([p.numel() for p in model.parameters() if p.requires_grad])
     print("Parameters: {}".format(num_parameters))
     hyperparams['num_parameters'] = num_parameters
-    wandb.init(project="msi-ebm", entity='phil',
-               group="Copy of green dot", job_type="downsampled branch, data aug",
+    wandb.init(project="modular-ebm", entity='phil',
+               group="", job_type="",
                config=hyperparams)
 
     pbar = tqdm(total=num_epochs)
