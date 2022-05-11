@@ -1,5 +1,6 @@
 import torch
 
+
 class ReplayBuffer():
     def __init__(self, max_size, init_data):
         self.sample_list = init_data

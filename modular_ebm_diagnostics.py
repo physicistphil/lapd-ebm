@@ -24,10 +24,17 @@ import torch
 #     def forward(self, x):
 #         pass
 
+def getDeviceString(device_num):
+    if device_num <= -1:
+        return 'cpu'
+    if device_num >= 0:
+        return 'cuda:{}'.format(device_num)
+
 
 class AddAndNorm(torch.nn.Module):
     def __init__(self):
         super(AddAndNorm, self).__init__()
+        # These should automatically move to GPU since they're registered
         self.layerNorm = torch.nn.LayerNorm([256, 16])
 
     def forward(self, x1, x2):
@@ -41,6 +48,7 @@ class PositionWiseFFNN(torch.nn.Module):
     def __init__(self, num_inputs, num_hidden, num_outputs):
         super(PositionWiseFFNN, self).__init__()
 
+        # These should automatically move to GPU since they're registered
         self.dense1 = torch.nn.Linear(num_inputs, num_hidden)
         self.relu = torch.nn.ReLU()
         self.dense2 = torch.nn.Linear(num_hidden, num_outputs)
@@ -60,9 +68,9 @@ class ResidualAttnBlock(torch.nn.Module):
 
         self.attn = torch.nn.MultiheadAttention(embed_dim, num_heads,
                                                 batch_first=True)
-        self.addNorm1 = AddAndNorm().cuda()
-        self.posWiseNN = PositionWiseFFNN(embed_dim, num_hidden, embed_dim).cuda()
-        self.addNorm2 = AddAndNorm().cuda()
+        self.addNorm1 = AddAndNorm()
+        self.posWiseNN = PositionWiseFFNN(embed_dim, num_hidden, embed_dim)
+        self.addNorm2 = AddAndNorm()
 
     def forward(self, x_resid):
         x = self.attn(x_resid, x_resid, x_resid)[0]  # Just the output, no weights
@@ -76,17 +84,20 @@ class SequencePositionalEncoding(torch.nn.Module):
     def __init__(self, embed_dim, seq_length):
         super(SequencePositionalEncoding, self).__init__()
 
-        self.posEncoding = torch.zeros((1, seq_length, embed_dim)).cuda()
-
-        i = torch.arange(0, seq_length).reshape(seq_length, 1).cuda()
-        j2 = torch.arange(0, embed_dim, 2).reshape(1, embed_dim // 2).cuda()
+        # I'm defining tensors here so they will NOT automatically be moved to the correct GPU.
+        # I'll fix this on the forward pass.
+        self.posEncoding = torch.zeros((1, seq_length, embed_dim))
+        i = torch.arange(0, seq_length).reshape(seq_length, 1)
+        j2 = torch.arange(0, embed_dim, 2).reshape(1, embed_dim // 2)
         posVal = i / torch.pow(10000, j2 / embed_dim)
 
         self.posEncoding[:, :, 0::2] = torch.sin(posVal)
         self.posEncoding[:, :, 1::2] = torch.cos(posVal)
 
     def forward(self, x):
-        x = x + self.posEncoding
+        device = getDeviceString(x.get_device())
+
+        x = x + self.posEncoding.to(device)
         return x
 
 
@@ -103,7 +114,7 @@ class MSITimeSeriesModule(torch.nn.Module):
         num_heads = 4
         num_hidden = 256
 
-        self.seqPosEnc = SequencePositionalEncoding(out_channels, seq_length).cuda()
+        self.seqPosEnc = SequencePositionalEncoding(out_channels, seq_length)
 
         # Signal processing branch
         self.relu = torch.nn.ReLU()
@@ -111,15 +122,15 @@ class MSITimeSeriesModule(torch.nn.Module):
         self.conv2 = torch.nn.LazyConv1d(out_channels, kernel_size)
 
         self.msiAttnBlocks = torch.nn.ModuleList([
-            ResidualAttnBlock(out_channels, num_heads, num_hidden).cuda()
+            ResidualAttnBlock(out_channels, num_heads, num_hidden)
             for i in range(num_msi_attn)])
 
         self.memAttnBlocks = torch.nn.ModuleList([
-            ResidualAttnBlock(out_channels, num_heads, num_hidden).cuda()
+            ResidualAttnBlock(out_channels, num_heads, num_hidden)
             for i in range(num_mem_attn)])
 
         self.sumAttnBlocks = torch.nn.ModuleList([
-            ResidualAttnBlock(out_channels, num_heads, num_hidden).cuda()
+            ResidualAttnBlock(out_channels, num_heads, num_hidden)
             for i in range(num_sum_attn)])
 
     # shared_memory: a tensor that this module will read/write to
@@ -127,6 +138,8 @@ class MSITimeSeriesModule(torch.nn.Module):
     # ^ these will be included later
     # orient_module: module encoding the orientation of the diagnostic
     def forward(self, x, shared_memory):
+        # device = getDeviceString(x.get_device())
+
         # x is shape (batch_size, seq_length)
         x = torch.unsqueeze(x, 1)  # Make into shape (batch_size, channels, seq_length)
         x = self.zeroPad(x)  # Add padding to get CNN output seq length to 256
@@ -162,35 +175,37 @@ class RGAPressureModule(torch.nn.Module):
         super(RGAPressureModule, self).__init__()
 
         self.seq_length = seq_length
-        out_channels = 16
+        embed_dim = 16
         # Attention setup
         num_heads = 4
         num_hidden = 256
 
-        self.seqPosEnc = SequencePositionalEncoding(out_channels, seq_length).cuda()
+        self.seqPosEnc = SequencePositionalEncoding(embed_dim, seq_length)
 
         # Signal processing branch
         self.relu = torch.nn.ReLU()
-        self.dense1 = torch.nn.LazyLinear(seq_length * 16)
+        self.dense1 = torch.nn.LazyLinear(seq_length)
         # self.dense2 = torch.nn.LazyLinear(seq_length * 16)
+        self.posWiseNN = PositionWiseFFNN(1, 32, embed_dim)
 
         self.msiAttnBlocks = torch.nn.ModuleList([
-            ResidualAttnBlock(out_channels, num_heads, num_hidden).cuda()
+            ResidualAttnBlock(embed_dim, num_heads, num_hidden)
             for i in range(num_msi_attn)])
 
         self.memAttnBlocks = torch.nn.ModuleList([
-            ResidualAttnBlock(out_channels, num_heads, num_hidden).cuda()
+            ResidualAttnBlock(embed_dim, num_heads, num_hidden)
             for i in range(num_mem_attn)])
 
         self.sumAttnBlocks = torch.nn.ModuleList([
-            ResidualAttnBlock(out_channels, num_heads, num_hidden).cuda()
+            ResidualAttnBlock(embed_dim, num_heads, num_hidden)
             for i in range(num_sum_attn)])
 
     def forward(self, x, shared_memory):
         x = self.dense1(x)
-        # x = self.relu(x)
+        x = self.relu(x)
         # x = self.dense2(x)
-        x = x.reshape(-1, self.seq_length, 16)
+        x = self.posWiseNN(x.reshape(-1, self.seq_length, 1))
+        # x = x.reshape(-1, self.seq_length, 16)
         x = self.seqPosEnc(x)
 
         for i, block in enumerate(self.msiAttnBlocks):
@@ -198,6 +213,7 @@ class RGAPressureModule(torch.nn.Module):
         # should now have shape (batch_size, channels, seq_length), which is the same as memory
 
         # process the memory using attention
+        x_mem = self.seqPosEnc(shared_memory)
         for i, block in enumerate(self.memAttnBlocks):
             x_mem = block(shared_memory)
 
@@ -205,6 +221,7 @@ class RGAPressureModule(torch.nn.Module):
         x = x + x_mem
 
         # figure out which items to write to memory
+        x = self.seqPosEnc(x)
         for i, block in enumerate(self.sumAttnBlocks):
             x = block(x)
 
@@ -219,7 +236,7 @@ class MagneticFieldModule(torch.nn.Module):
 
         self.linearExpander = torch.nn.LazyLinear(seq_length)
         self.msiProcessor = MSITimeSeriesModule(seq_length, num_msi_attn,
-                                                num_mem_attn, num_sum_attn).cuda()
+                                                num_mem_attn, num_sum_attn)
 
     def forward(self, x, shared_memory):
         x = self.linearExpander(x)
