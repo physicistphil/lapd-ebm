@@ -32,10 +32,10 @@ def getDeviceString(device_num):
 
 
 class AddAndNorm(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, seq_length, embed_dim):
         super(AddAndNorm, self).__init__()
         # These should automatically move to GPU since they're registered
-        self.layerNorm = torch.nn.LayerNorm([256, 16])
+        self.layerNorm = torch.nn.LayerNorm([seq_length, embed_dim])
 
     def forward(self, x1, x2):
         x = self.layerNorm(x1 + x2)
@@ -63,14 +63,14 @@ class PositionWiseFFNN(torch.nn.Module):
 
 
 class ResidualAttnBlock(torch.nn.Module):
-    def __init__(self, embed_dim, num_heads, num_hidden):
+    def __init__(self, seq_length, embed_dim, num_heads, num_hidden):
         super(ResidualAttnBlock, self).__init__()
 
         self.attn = torch.nn.MultiheadAttention(embed_dim, num_heads,
                                                 batch_first=True)
-        self.addNorm1 = AddAndNorm()
+        self.addNorm1 = AddAndNorm(seq_length, embed_dim)
         self.posWiseNN = PositionWiseFFNN(embed_dim, num_hidden, embed_dim)
-        self.addNorm2 = AddAndNorm()
+        self.addNorm2 = AddAndNorm(seq_length, embed_dim)
 
     def forward(self, x_resid):
         x = self.attn(x_resid, x_resid, x_resid)[0]  # Just the output, no weights
@@ -101,18 +101,19 @@ class SequencePositionalEncoding(torch.nn.Module):
         return x
 
 
-# memory is shape batch x 16 x 256
+# memory is shape batch x seq_length x embed_dim
 class MSITimeSeriesModule(torch.nn.Module):
-    def __init__(self, seq_length, num_msi_attn, num_mem_attn, num_sum_attn):
+    def __init__(self, seq_length, embed_dim, num_heads, num_hidden,
+                 num_msi_attn, num_mem_attn, num_sum_attn):
         super(MSITimeSeriesModule, self).__init__()
 
         # CNN setup
-        out_channels = 16
+        out_channels = embed_dim
         kernel_size = 4
         self.zeroPad = torch.nn.ConstantPad1d((1, 2), 0)
         # Attention setup
-        num_heads = 4
-        num_hidden = 256
+        # num_heads = 4
+        # num_hidden = 256
 
         self.seqPosEnc = SequencePositionalEncoding(out_channels, seq_length)
 
@@ -122,15 +123,15 @@ class MSITimeSeriesModule(torch.nn.Module):
         self.conv2 = torch.nn.LazyConv1d(out_channels, kernel_size)
 
         self.msiAttnBlocks = torch.nn.ModuleList([
-            ResidualAttnBlock(out_channels, num_heads, num_hidden)
+            ResidualAttnBlock(seq_length, out_channels, num_heads, num_hidden)
             for i in range(num_msi_attn)])
 
         self.memAttnBlocks = torch.nn.ModuleList([
-            ResidualAttnBlock(out_channels, num_heads, num_hidden)
+            ResidualAttnBlock(seq_length, out_channels, num_heads, num_hidden)
             for i in range(num_mem_attn)])
 
         self.sumAttnBlocks = torch.nn.ModuleList([
-            ResidualAttnBlock(out_channels, num_heads, num_hidden)
+            ResidualAttnBlock(seq_length, out_channels, num_heads, num_hidden)
             for i in range(num_sum_attn)])
 
     # shared_memory: a tensor that this module will read/write to
@@ -138,8 +139,6 @@ class MSITimeSeriesModule(torch.nn.Module):
     # ^ these will be included later
     # orient_module: module encoding the orientation of the diagnostic
     def forward(self, x, shared_memory):
-        # device = getDeviceString(x.get_device())
-
         # x is shape (batch_size, seq_length)
         x = torch.unsqueeze(x, 1)  # Make into shape (batch_size, channels, seq_length)
         x = self.zeroPad(x)  # Add padding to get CNN output seq length to 256
@@ -171,14 +170,15 @@ class MSITimeSeriesModule(torch.nn.Module):
 
 
 class RGAPressureModule(torch.nn.Module):
-    def __init__(self, seq_length, num_msi_attn, num_mem_attn, num_sum_attn):
+    def __init__(self, seq_length, embed_dim, num_heads, num_hidden,
+                 num_msi_attn, num_mem_attn, num_sum_attn):
         super(RGAPressureModule, self).__init__()
 
         self.seq_length = seq_length
-        embed_dim = 16
+        # embed_dim = 16
         # Attention setup
-        num_heads = 4
-        num_hidden = 256
+        # num_heads = 4
+        # num_hidden = 256
 
         self.seqPosEnc = SequencePositionalEncoding(embed_dim, seq_length)
 
@@ -189,15 +189,15 @@ class RGAPressureModule(torch.nn.Module):
         self.posWiseNN = PositionWiseFFNN(1, 32, embed_dim)
 
         self.msiAttnBlocks = torch.nn.ModuleList([
-            ResidualAttnBlock(embed_dim, num_heads, num_hidden)
+            ResidualAttnBlock(seq_length, embed_dim, num_heads, num_hidden)
             for i in range(num_msi_attn)])
 
         self.memAttnBlocks = torch.nn.ModuleList([
-            ResidualAttnBlock(embed_dim, num_heads, num_hidden)
+            ResidualAttnBlock(seq_length, embed_dim, num_heads, num_hidden)
             for i in range(num_mem_attn)])
 
         self.sumAttnBlocks = torch.nn.ModuleList([
-            ResidualAttnBlock(embed_dim, num_heads, num_hidden)
+            ResidualAttnBlock(seq_length, embed_dim, num_heads, num_hidden)
             for i in range(num_sum_attn)])
 
     def forward(self, x, shared_memory):
@@ -229,14 +229,15 @@ class RGAPressureModule(torch.nn.Module):
 
 
 class MagneticFieldModule(torch.nn.Module):
-    def __init__(self, seq_length, num_msi_attn, num_mem_attn, num_sum_attn):
+    def __init__(self, seq_length, embed_dim, num_heads, num_hidden,
+                 num_msi_attn, num_mem_attn, num_sum_attn):
         super(MagneticFieldModule, self).__init__()
 
         self.seq_length = seq_length
 
         self.linearExpander = torch.nn.LazyLinear(seq_length)
-        self.msiProcessor = MSITimeSeriesModule(seq_length, num_msi_attn,
-                                                num_mem_attn, num_sum_attn)
+        self.msiProcessor = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
+                                                num_msi_attn, num_mem_attn, num_sum_attn)
 
     def forward(self, x, shared_memory):
         x = self.linearExpander(x)

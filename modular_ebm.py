@@ -34,33 +34,37 @@ class ModularWithRNNBackbone(torch.nn.Module):
     def __init__(self):
         super(ModularWithRNNBackbone, self).__init__()
 
-        seq_length = 256
+        # Set model sizes
+        self.seq_length = seq_length = 256
+        self.embed_dim = embed_dim = 6
+        num_heads = 2
+        num_hidden = 32
+
+        energy_embed_dim = 6
+        energy_num_heads = 2
+        energy_num_hidden = 32
+        energy_num_attn = 1
+
+        self.memory_iterations = 2
 
         # seq_length, num_msi_attn, num_mem_attn, num_sum_attn
-        self.dishargeI = MSITimeSeriesModule(seq_length, 1, 1, 1).cuda()
-        self.dishargeV = MSITimeSeriesModule(seq_length, 1, 1, 1).cuda()
-        self.interferometer = MSITimeSeriesModule(seq_length, 1, 1, 1).cuda()
-        self.diodes = MSITimeSeriesModule(seq_length, 1, 1, 1).cuda()
-        self.magnets = MagneticFieldModule(seq_length, 1, 1, 1).cuda()
-        self.RGA = RGAPressureModule(seq_length, 1, 1, 1).cuda()
+        self.dishargeI = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden, 1, 1, 1).cuda()
+        self.dishargeV = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden, 1, 1, 1).cuda()
+        self.interferometer = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden, 1, 1, 1).cuda()
+        self.diodes = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden, 1, 1, 1).cuda()
+        self.magnets = MagneticFieldModule(seq_length, embed_dim, num_heads, num_hidden, 1, 1, 1).cuda()
+        self.RGA = RGAPressureModule(seq_length, embed_dim, num_heads, num_hidden, 1, 1, 1).cuda()
 
-        embed_dim = 16
-        num_heads = 4
-        num_hidden = 128
-        num_attn = 2
-
-        self.seqPosEnc = SequencePositionalEncoding(embed_dim, seq_length).cuda()
+        self.seqPosEnc = SequencePositionalEncoding(energy_embed_dim, seq_length).cuda()
         self.attnBlocks = torch.nn.ModuleList([
-            ResidualAttnBlock(embed_dim, num_heads, num_hidden).cuda()
-            for i in range(num_attn)])
+            ResidualAttnBlock(seq_length, energy_embed_dim, energy_num_heads, energy_num_hidden).cuda()
+            for i in range(energy_num_attn)])
 
         self.softmax = torch.nn.Softmax(dim=1)  # softmax over the seq_length
         self.linear = torch.nn.LazyLinear(1)
 
     def forward(self, x):
         device = getDeviceString(x.get_device())
-
-        iterations = 1
 
         I_x = x[:, 256 * 0:256 * 1]
         V_x = x[:, 256 * 1:256 * 2]
@@ -73,9 +77,9 @@ class ModularWithRNNBackbone(torch.nn.Module):
 
         batch_size = I_x.shape[0]
 
-        shared_memory_temp = torch.zeros((batch_size, 256, 16)).to(device)
-        shared_memory = torch.zeros((batch_size, 256, 16)).to(device)
-        for i in range(iterations):
+        shared_memory_temp = torch.zeros((batch_size, self.seq_length, self.embed_dim)).to(device)
+        shared_memory = torch.zeros((batch_size, self.seq_length, self.embed_dim)).to(device)
+        for i in range(self.memory_iterations):
             shared_memory += self.dishargeI(I_x, shared_memory_temp)
             shared_memory += self.dishargeV(V_x, shared_memory_temp)
             shared_memory += self.interferometer(n_x, shared_memory_temp)
