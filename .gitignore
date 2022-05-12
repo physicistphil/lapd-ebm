@@ -131,6 +131,7 @@ dmypy.json
 # Images and movies
 *.png
 *.mp4
+*.pdf
 
 # Data
 *.hdf5
