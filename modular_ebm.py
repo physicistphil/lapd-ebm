@@ -152,9 +152,9 @@ def main(rank, world_size):
 
         "weight_decay": 1e-1,
         "identifier": identifier,
-        "resume": False,
-        # "resume_path": "2022-03-16_22h-00m-14s",
-        # "resume_version": "checkpoints/model-50"
+        "resume": True,
+        "resume_path": "2022-05-11_18h-29m-12s",
+        "resume_version": "checkpoints/model-0-3826"
     }
 
     num_epochs = hyperparams["num_epochs"]
@@ -184,6 +184,11 @@ def main(rank, world_size):
         spec.loader.exec_module(ebm)
         model = ebm.ModularWithRNNBackbone()
 
+    # initialze for lazy layers so that the num_parameters works properly
+    model = model.to(rank)
+    model(torch.zeros((2, 1715)).to(rank))
+    model = DDP(model, device_ids=[rank], output_device=rank, find_unused_parameters=False)
+
     data_path = "data/data-MSI-hairpin_002-train.npz"
     data = load_data(data_path)
 
@@ -198,11 +203,12 @@ def main(rank, world_size):
 
     replay_buffer = ReplayBuffer(replay_size, torch.rand((replay_size, data.shape[1])).to(rank) * 2 - 1)
 
+    map_location = {'cuda:%d' % 0: 'cuda:%d' % rank}
     if resume:
-        ckpt = torch.load(exp_path + resume_path + "/" + resume_version + ".pt")
-        model.load_state_dict(ckpt['model_state_dict'], strict=False)
+        ckpt = torch.load(exp_path + resume_path + "/" + resume_version + ".pt", map_location=map_location)
+        model.load_state_dict(ckpt['model_state_dict'], strict=True)
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-        replay_buffer.sample_list = ckpt['replay_buffer_list']
+        # replay_buffer.sample_list = ckpt['replay_buffer_list']
 
     num_data = data.shape[0]
     num_batches = len(dataloader)
@@ -210,13 +216,12 @@ def main(rank, world_size):
     # Warmup schedule for the model
     lr_lambda_linear = lambda x: 1.0 if x >= num_batches else x / num_batches * 0.95 + 0.05
     linearScheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda_linear)
-    lr_lambda_sqrt = lambda x: 1.0 if x < num_batches else 1 / torch.sqrt(x - num_batches)
+    lr_lambda_sqrt = lambda x: 1.0 if x < num_batches else 1 / torch.sqrt(torch.tensor(x - num_batches)).to(rank)
     sqrtScheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda_sqrt)
 
-    # initialze for lazy layers so that the num_parameters works properly
-    model = model.to(rank)
-    model(torch.zeros((2, 1715)).to(rank))
-    model = DDP(model, device_ids=[rank], output_device=rank, find_unused_parameters=False)
+    if resume:
+        linearScheduler.load_state_dict(ckpt['linearScheduler_state_dict'])
+        sqrtScheduler.load_state_dict(ckpt['sqrtScheduler_state_dict'])
 
     if rank == 0:
         summary(model, (1715,))
@@ -227,9 +232,11 @@ def main(rank, world_size):
                    group="", job_type="",
                    config=hyperparams)
 
-    t_start1 = t_start2 = time.time()
+    t_start0 = t_start1 = t_start2 = time.time()
     pbar = tqdm(total=num_epochs)
     batch_iteration = 0
+    if resume:
+        batch_iteration = ckpt['batch_iteration']
     model.train(True)
     scaler = torch.cuda.amp.GradScaler(init_scale=1e6)
     for epoch in range(num_epochs):
@@ -347,7 +354,6 @@ def main(rank, world_size):
                            "loss/max_likelihood": loss - kl_loss,
                            "batch_num": batch_iteration,
                            "epoch": epoch})
-                batch_iteration += 1
 
             # Longer-term metrics
             if rank == 0:
@@ -362,7 +368,8 @@ def main(rank, world_size):
                 energy_kl_list -= avg_energy_kl
 
                 # Log to tensorboard every 5 min
-                if (epoch == 0 and i == 2) or time.time() - t_start1 > 300:
+                if (epoch == 0 and i == 2) or time.time() - t_start0 > 300:
+                    t_start0 = time.time()
                     # write scalars and histograms
                     writer.add_scalar("loss/total", loss_avg, batch_iteration)
                     writer.add_scalar('energy/reg', reg_avg, batch_iteration)
@@ -401,12 +408,17 @@ def main(rank, world_size):
 
                 if (epoch == 0 and i == 2) or time.time() - t_start2 > 3600:
                     t_start2 = time.time()
-                    torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(),
+                    torch.save({'epoch': epoch,
+                                'batch_iteration': batch_iteration,
+                                'model_state_dict': model.state_dict(),
                                 'optimizer_state_dict': optimizer.state_dict(),
+                                'linearScheduler_state_dict': linearScheduler.state_dict(),
+                                'sqrtScheduler_state_dict': sqrtScheduler.state_dict()
                                 # 'replay_buffer_list': replay_buffer.sample_list
                                 },
                                path + "/checkpoints/model-{}-{}.pt".format(epoch, i))
 
+            batch_iteration += 1
             batch_pbar.update(1)
         batch_pbar.close()
         pbar.update(1)
