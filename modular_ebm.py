@@ -363,15 +363,15 @@ def main(rank, world_size):
 
                 # Log to tensorboard every 5 min
                 if (epoch == 0 and i == 2) or time.time() - t_start1 > 300:
-                # write scalars and histograms
-                writer.add_scalar("loss/total", loss_avg, batch_iteration)
-                writer.add_scalar('energy/reg', reg_avg, batch_iteration)
-                writer.add_scalar("energy/positive", avg_energy_pos, batch_iteration)
-                writer.add_scalar("energy/negative", avg_energy_neg, batch_iteration)
-                writer.add_scalar("energy/negative_relative", avg_energy_neg - avg_energy_pos, batch_iteration)
-                writer.add_scalar("energy/kl_energy", avg_energy_kl, batch_iteration)
-                writer.add_scalar("loss/kl_loss", kl_loss_avg, batch_iteration)
-                writer.add_scalar("loss/max_likelihood", loss_avg - kl_loss_avg, batch_iteration)
+                    # write scalars and histograms
+                    writer.add_scalar("loss/total", loss_avg, batch_iteration)
+                    writer.add_scalar('energy/reg', reg_avg, batch_iteration)
+                    writer.add_scalar("energy/positive", avg_energy_pos, batch_iteration)
+                    writer.add_scalar("energy/negative", avg_energy_neg, batch_iteration)
+                    writer.add_scalar("energy/negative_relative", avg_energy_neg - avg_energy_pos, batch_iteration)
+                    writer.add_scalar("energy/kl_energy", avg_energy_kl, batch_iteration)
+                    writer.add_scalar("loss/kl_loss", kl_loss_avg, batch_iteration)
+                    writer.add_scalar("loss/max_likelihood", loss_avg - kl_loss_avg, batch_iteration)
                 # wandb.log({"loss/total": loss_avg,
                 #            "energy/reg": reg_avg,
                 #            "energy/positive": avg_energy_pos,
