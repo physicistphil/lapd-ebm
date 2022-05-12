@@ -1,13 +1,14 @@
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torchsummary import summary
+from torchsummary import summary  # Print model / parameter details
 
 import numpy as np
 from tqdm import tqdm
 import wandb
 import os
 import datetime
+import time
 import shutil
 import importlib
 # import matplotlib.pyplot as plt
@@ -15,6 +16,10 @@ import importlib
 
 from modular_ebm_diagnostics import *
 from modular_ebm_sampling import *
+
+# Pretty tracebacks
+import rich.traceback
+rich.traceback.install()
 
 
 def load_data(path):
@@ -138,11 +143,11 @@ def main(rank, world_size):
         "noise_scale": 5e-3,
         "augment_data": True,
 
-        "batch_size_max": 20,
+        "batch_size_max": 16,
         "lr": 1e-4,
 
-        "kl_weight_energy": 1e-1,
-        "kl_weight_entropy": 1e-1,
+        "kl_weight_energy": 1e0,
+        "kl_weight_entropy": 1e0,
         "kl_backprop_steps": 1,
 
         "weight_decay": 1e-1,
@@ -190,6 +195,7 @@ def main(rank, world_size):
                                              num_workers=0, pin_memory=False, sampler=sampler)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay,
                                   betas=(0.0, 0.999))
+
     replay_buffer = ReplayBuffer(replay_size, torch.rand((replay_size, data.shape[1])).to(rank) * 2 - 1)
 
     if resume:
@@ -200,6 +206,12 @@ def main(rank, world_size):
 
     num_data = data.shape[0]
     num_batches = len(dataloader)
+
+    # Warmup schedule for the model
+    lr_lambda_linear = lambda x: 1.0 if x >= num_batches else x / num_batches * 0.95 + 0.05
+    linearScheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda_linear)
+    lr_lambda_sqrt = lambda x: 1.0 if x < num_batches else 1 / torch.sqrt(x - num_batches)
+    sqrtScheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda_sqrt)
 
     # initialze for lazy layers so that the num_parameters works properly
     model = model.to(rank)
@@ -215,6 +227,7 @@ def main(rank, world_size):
                    group="", job_type="",
                    config=hyperparams)
 
+    t_start1 = t_start2 = time.time()
     pbar = tqdm(total=num_epochs)
     batch_iteration = 0
     model.train(True)
@@ -290,6 +303,11 @@ def main(rank, world_size):
             # optimizer.step()
             scaler.step(optimizer)
             scaler.update()
+            linearScheduler.step()
+            sqrtScheduler.step()
+
+            # print(linearScheduler.get_last_lr())
+            # print(sqrtScheduler.get_last_lr())
 
             if rank == 0:
                 loss_avg += loss.detach() * batch_size / num_data
@@ -326,60 +344,71 @@ def main(rank, world_size):
                            "energy/negative_relative": neg_energy - pos_energy,
                            "energy/kl_energy": kl_energy,
                            "loss/kl_loss": kl_loss,
+                           "loss/max_likelihood": loss - kl_loss,
                            "batch_num": batch_iteration,
                            "epoch": epoch})
                 batch_iteration += 1
+
+            # Longer-term metrics
+            if rank == 0:
+                # scalars
+                avg_energy_pos = energy_pos_list.mean()
+                avg_energy_neg = energy_neg_list.mean()
+                avg_energy_kl = energy_kl_list.mean()
+
+                # histograms
+                energy_pos_list -= avg_energy_pos
+                energy_neg_list -= avg_energy_pos
+                energy_kl_list -= avg_energy_kl
+
+                # Log to tensorboard every 5 min
+                if (epoch == 0 and i == 2) or time.time() - t_start1 > 300:
+                # write scalars and histograms
+                writer.add_scalar("loss/total", loss_avg, batch_iteration)
+                writer.add_scalar('energy/reg', reg_avg, batch_iteration)
+                writer.add_scalar("energy/positive", avg_energy_pos, batch_iteration)
+                writer.add_scalar("energy/negative", avg_energy_neg, batch_iteration)
+                writer.add_scalar("energy/negative_relative", avg_energy_neg - avg_energy_pos, batch_iteration)
+                writer.add_scalar("energy/kl_energy", avg_energy_kl, batch_iteration)
+                writer.add_scalar("loss/kl_loss", kl_loss_avg, batch_iteration)
+                writer.add_scalar("loss/max_likelihood", loss_avg - kl_loss_avg, batch_iteration)
+                # wandb.log({"loss/total": loss_avg,
+                #            "energy/reg": reg_avg,
+                #            "energy/positive": avg_energy_pos,
+                #            "energy/negative": avg_energy_neg,
+                #            "energy/negative_relative": avg_energy_neg - avg_energy_pos,
+                #            "energy/kl_energy": avg_energy_kl,
+                #            "loss/kl_loss": kl_loss_avg,
+                #            "loss/max_likelihood": loss_avg - kl_loss_avg,
+                #            "epoch": epoch})
+
+                if (epoch == 0 and i == 2) or time.time() - t_start1 > 1200:
+                    t_start1 = time.time()
+                    writer.add_histogram("energy/pos_relative", energy_pos_list, batch_iteration)
+                    writer.add_histogram("energy/neg_relative", energy_neg_list, batch_iteration)
+                    writer.add_histogram("energy_kl_list", energy_kl_list, batch_iteration)
+                    try:
+                        for name, weight in model.named_parameters():
+                            writer.add_histogram("w/" + name, weight, batch_iteration)
+                            writer.add_histogram(f'g/{name}.grad', weight.grad, batch_iteration)
+                    except Exception as e:
+                        print(e)
+                    writer.flush()
+                    tqdm.write("E: {} // L: {:.2e} // (+): {:.2e} // (-): {:.2e} // "
+                               "(-)-(+): {:.2e}".format(epoch, loss_avg, avg_energy_pos,
+                                                        avg_energy_neg,
+                                                        avg_energy_neg - avg_energy_pos))
+
+                if (epoch == 0 and i == 2) or time.time() - t_start2 > 3600:
+                    t_start2 = time.time()
+                    torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(),
+                                'optimizer_state_dict': optimizer.state_dict(),
+                                # 'replay_buffer_list': replay_buffer.sample_list
+                                },
+                               path + "/checkpoints/model-{}-{}.pt".format(epoch, i))
+
             batch_pbar.update(1)
         batch_pbar.close()
-
-        if rank == 0:
-            # scalars
-            avg_energy_pos = energy_pos_list.mean()
-            avg_energy_neg = energy_neg_list.mean()
-            avg_energy_kl = energy_kl_list.mean()
-
-            # histograms
-            energy_pos_list -= avg_energy_pos
-            energy_neg_list -= avg_energy_pos
-            energy_kl_list -= avg_energy_kl
-
-            # write scalars and histograms
-            writer.add_scalar("loss/total", loss_avg, epoch)
-            writer.add_scalar('energy/reg', reg_avg, epoch)
-            writer.add_scalar("energy/positive", avg_energy_pos, epoch)
-            writer.add_scalar("energy/negative", avg_energy_neg, epoch)
-            writer.add_scalar("energy/negative_relative", avg_energy_neg - avg_energy_pos, epoch)
-            writer.add_scalar("energy/kl_energy", avg_energy_kl, epoch)
-            writer.add_scalar("loss/kl_loss", kl_loss_avg, epoch)
-            wandb.log({"loss/total": loss_avg,
-                       "energy/reg": reg_avg,
-                       "energy/positive": avg_energy_pos,
-                       "energy/negative": avg_energy_neg,
-                       "energy/negative_relative": avg_energy_neg - avg_energy_pos,
-                       "energy/kl_energy": avg_energy_kl,
-                       "loss/kl_loss": kl_loss_avg,
-                       "epoch": epoch})
-
-            if epoch % 5 == 0 or epoch == num_epochs - 1:
-                writer.add_histogram("energy/pos_relative", energy_pos_list, epoch)
-                writer.add_histogram("energy/neg_relative", energy_neg_list, epoch)
-                writer.add_histogram("energy_kl_list", energy_kl_list, epoch)
-                for name, weight in model.named_parameters():
-                    writer.add_histogram("w/" + name, weight, epoch)
-                    writer.add_histogram(f'g/{name}.grad', weight.grad, epoch)
-                writer.flush()
-                tqdm.write("E: {} // L: {:.2e} // (+): {:.2e} // (-): {:.2e} // "
-                           "(-)-(+): {:.2e}".format(epoch, loss_avg, avg_energy_pos,
-                                                    avg_energy_neg,
-                                                    avg_energy_neg - avg_energy_pos))
-
-            if epoch % 10 == 0 or epoch == num_epochs - 1:
-                torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(),
-                            'optimizer_state_dict': optimizer.state_dict(),
-                            # 'replay_buffer_list': replay_buffer.sample_list
-                            },
-                           path + "/checkpoints/model-{}.pt".format(epoch))
-
         pbar.update(1)
     pbar.close()
 
