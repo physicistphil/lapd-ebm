@@ -21,8 +21,10 @@ from modular_ebm_sampling import *
 import rich.traceback
 rich.traceback.install()
 
+import sys
 
-def load_data(path):
+
+def load_data_old(path):
     data_signals = np.load(path)['signals']
     # Encode positions later
     # data_positions = np.load(path)['positions']
@@ -35,30 +37,75 @@ def load_data(path):
     return data
 
 
+def load_data(path):
+    datafile = np.load(path)
+    data_signals = datafile['signals']
+    data = np.concatenate((data_signals['discharge_current'],
+                           data_signals['discharge_voltage'],
+                           data_signals['interferometer'],
+                           data_signals['diode_0'],
+                           data_signals['diode_1'],
+                           data_signals['diode_2'],
+                           data_signals['diode_3'],
+                           data_signals['diode_4'],
+                           data_signals['magnet_profile'],
+                           np.nan_to_num(data_signals['pressures'], nan=-0.9)), axis=1)
+    del data_signals
+
+    enabled_mask = np.ones((data.shape[0], 10), dtype=bool)
+    enabled_mask[datafile['discharge_current_cut'].astype('i4'), 0] = False
+    enabled_mask[datafile['discharge_voltage_cut'].astype('i4'), 1] = False
+    enabled_mask[datafile['interferometer_cut'].astype('i4'), 2] = False
+    enabled_mask[datafile['diode_0_cut'].astype('i4'), 3] = False
+    enabled_mask[datafile['diode_1_cut'].astype('i4'), 4] = False
+    enabled_mask[datafile['diode_2_cut'].astype('i4'), 5] = False
+    enabled_mask[datafile['diode_3_cut'].astype('i4'), 6] = False
+    enabled_mask[datafile['diode_4_cut'].astype('i4'), 7] = False
+    enabled_mask[datafile['magnet_profile_cut'].astype('i4'), 8] = False
+    enabled_mask[datafile['pressures_cut'].astype('i4'), 9] = False
+    data = np.concatenate((data, enabled_mask), axis=1)
+    del enabled_mask
+
+    data = torch.tensor(data, dtype=torch.float)
+
+    return data
+
+
 class ModularWithRNNBackbone(torch.nn.Module):
     def __init__(self):
         super(ModularWithRNNBackbone, self).__init__()
 
         # Set model sizes
-        self.seq_length = seq_length = 256
-        self.embed_dim = embed_dim = 6
+        self.seq_length = seq_length = 32
+        self.embed_dim = embed_dim = 12
         num_heads = 2
-        num_hidden = 32
+        num_hidden = 64
+        num_msi_attn = 2
+        num_mem_attn = 2
+        num_sum_attn = 2
 
-        energy_embed_dim = 6
+        energy_embed_dim = 12
         energy_num_heads = 2
-        energy_num_hidden = 32
-        energy_num_attn = 1
+        energy_num_hidden = 64
+        energy_num_attn = 2
 
         self.memory_iterations = 2
 
         # seq_length, num_msi_attn, num_mem_attn, num_sum_attn
-        self.dishargeI = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden, 1, 1, 1).cuda()
-        self.dishargeV = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden, 1, 1, 1).cuda()
-        self.interferometer = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden, 1, 1, 1).cuda()
-        self.diodes = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden, 1, 1, 1).cuda()
-        self.magnets = MagneticFieldModule(seq_length, embed_dim, num_heads, num_hidden, 1, 1, 1).cuda()
-        self.RGA = RGAPressureModule(seq_length, embed_dim, num_heads, num_hidden, 1, 1, 1).cuda()
+        self.dishargeI = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
+                                             num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        self.dishargeV = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
+                                             num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        self.interferometer = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
+                                                  num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        self.diodes = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
+                                          num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        self.diode_HeII = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
+                                              num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        self.magnets = MagneticFieldModule(seq_length, embed_dim, num_heads, num_hidden,
+                                           num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        self.RGA = RGAPressureModule(seq_length, embed_dim, num_heads, num_hidden,
+                                     num_msi_attn, num_mem_attn, num_sum_attn).cuda()
 
         self.seqPosEnc = SequencePositionalEncoding(energy_embed_dim, seq_length).cuda()
         self.attnBlocks = torch.nn.ModuleList([
@@ -71,28 +118,43 @@ class ModularWithRNNBackbone(torch.nn.Module):
     def forward(self, x):
         device = getDeviceString(x.get_device())
 
-        I_x = x[:, 256 * 0:256 * 1]
-        V_x = x[:, 256 * 1:256 * 2]
-        n_x = x[:, 256 * 2:256 * 3]
-        d0_x = x[:, 256 * 3:256 * 4]
-        d1_x = x[:, 256 * 4:256 * 5]
-        d2_x = x[:, 256 * 5:256 * 6]
-        B_x = x[:, 1536:1536 + 128]
-        p_x = x[:, 1664:1664 + 51]
+        I_x = x[:, 32 * 0:32 * 1]
+        V_x = x[:, 32 * 1:32 * 2]
+        n_x = x[:, 32 * 2:32 * 3]
+        d0_x = x[:, 32 * 3:32 * 4]
+        d1_x = x[:, 32 * 4:32 * 5]
+        d2_x = x[:, 32 * 5:32 * 6]
+        d3_x = x[:, 32 * 6:32 * 7]
+        d4_x = x[:, 32 * 7:32 * 8]
+        B_x = x[:, 32 * 8:32 * 8 + 64]
+        p_x = x[:, 32 * 8 + 64:32 * 8 + 64 + 51]
+
+        I_on = torch.reshape(x[:, -10], (-1, 1, 1))
+        V_on = torch.reshape(x[:, -9], (-1, 1, 1))
+        n_on = torch.reshape(x[:, -8], (-1, 1, 1))
+        d0_on = torch.reshape(x[:, -7], (-1, 1, 1))
+        d1_on = torch.reshape(x[:, -6], (-1, 1, 1))
+        d2_on = torch.reshape(x[:, -5], (-1, 1, 1))
+        d3_on = torch.reshape(x[:, -4], (-1, 1, 1))
+        d4_on = torch.reshape(x[:, -3], (-1, 1, 1))
+        B_on = torch.reshape(x[:, -2], (-1, 1, 1))
+        p_on = torch.reshape(x[:, -1], (-1, 1, 1))
 
         batch_size = I_x.shape[0]
 
         shared_memory_temp = torch.zeros((batch_size, self.seq_length, self.embed_dim)).to(device)
-        shared_memory = torch.zeros((batch_size, self.seq_length, self.embed_dim)).to(device)
         for i in range(self.memory_iterations):
-            shared_memory += self.dishargeI(I_x, shared_memory_temp)
-            shared_memory += self.dishargeV(V_x, shared_memory_temp)
-            shared_memory += self.interferometer(n_x, shared_memory_temp)
-            shared_memory += self.diodes(d0_x, shared_memory_temp)
-            shared_memory += self.diodes(d1_x, shared_memory_temp)
-            shared_memory += self.diodes(d2_x, shared_memory_temp)
-            shared_memory += self.magnets(B_x, shared_memory_temp)
-            shared_memory += self.RGA(p_x, shared_memory_temp)
+            shared_memory = torch.zeros((batch_size, self.seq_length, self.embed_dim)).to(device)
+            shared_memory = (self.dishargeI(I_x, shared_memory_temp) * I_on +
+                             self.dishargeV(V_x, shared_memory_temp) * V_on +
+                             self.interferometer(n_x, shared_memory_temp) * n_on +
+                             self.diodes(d0_x, shared_memory_temp) * d0_on +
+                             self.diodes(d1_x, shared_memory_temp) * d1_on +
+                             self.diodes(d2_x, shared_memory_temp) * d2_on +
+                             self.diodes(d3_x, shared_memory_temp) * d3_on +
+                             self.diode_HeII(d4_x, shared_memory_temp) * d4_on +
+                             self.magnets(B_x, shared_memory_temp) * B_on +
+                             self.RGA(p_x, shared_memory_temp) * p_on)
             shared_memory_temp = shared_memory
 
         shared_memory = self.seqPosEnc(shared_memory)
@@ -128,12 +190,13 @@ def main(rank, world_size):
     if rank == 0:
         os.mkdir(path)
         os.mkdir(path + "/checkpoints")
+        os.mkdir(path + "/plots")
         shutil.copy(project_name + ".py", path + "/" + project_name + "_copy.py")
         shutil.copy(project_name + "_sampling.py", path + "/" + project_name + "sampling_copy.py")
         shutil.copy(project_name + "_diagnostics.py", path + "/" + project_name + "diagnostics_copy.py")
 
     hyperparams = {
-        "num_epochs": 51,
+        "num_epochs": 1,
         "reg_amount": 1e0,
         "replay_frac": 0.99,
         "replay_size": 8192,
@@ -143,7 +206,7 @@ def main(rank, world_size):
         "noise_scale": 5e-3,
         "augment_data": True,
 
-        "batch_size_max": 16,
+        "batch_size_max": 192,
         "lr": 1e-4,
 
         "kl_weight_energy": 1e0,
@@ -152,9 +215,9 @@ def main(rank, world_size):
 
         "weight_decay": 1e-1,
         "identifier": identifier,
-        "resume": True,
-        "resume_path": "2022-05-11_18h-29m-12s",
-        "resume_version": "checkpoints/model-0-3826"
+        "resume": False,
+        # "resume_path": "2022-05-11_23h-18m-46s",
+        # "resume_version": "checkpoints/model-0-3810"
     }
 
     num_epochs = hyperparams["num_epochs"]
@@ -184,24 +247,32 @@ def main(rank, world_size):
         spec.loader.exec_module(ebm)
         model = ebm.ModularWithRNNBackbone()
 
+    if rank == 0:
+        print("Loading data: " + path, flush=True)
+    data_path = "data/data-MSI-all_2022-5-22_17-6-24-train.npz"
+    data = load_data(data_path)
+    num_examples = data.shape[0]
+    data_size = data.shape[1]
+    if rank == 0:
+        print("Data shape: ", end="")
+        print(data.shape, flush=True)
+
     # initialze for lazy layers so that the num_parameters works properly
     model = model.to(rank)
-    model(torch.zeros((2, 1715)).to(rank))
+    model(torch.zeros((2, data_size)).to(rank))
     model = DDP(model, device_ids=[rank], output_device=rank, find_unused_parameters=False)
-
-    data_path = "data/data-MSI-hairpin_002-train.npz"
-    data = load_data(data_path)
 
     sampler = torch.utils.data.distributed.DistributedSampler(data, num_replicas=world_size,
                                                               rank=rank, shuffle=True,
                                                               drop_last=False)
     dataloader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(data),
                                              batch_size=batch_size_max, shuffle=False,
-                                             num_workers=0, pin_memory=False, sampler=sampler)
+                                             num_workers=1, pin_memory=False, sampler=sampler)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay,
                                   betas=(0.0, 0.999))
+    del data
 
-    replay_buffer = ReplayBuffer(replay_size, torch.rand((replay_size, data.shape[1])).to(rank) * 2 - 1)
+    replay_buffer = ReplayBuffer(replay_size, torch.rand((replay_size, data_size)).to(rank) * 2 - 1)
 
     map_location = {'cuda:%d' % 0: 'cuda:%d' % rank}
     if resume:
@@ -210,21 +281,22 @@ def main(rank, world_size):
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         # replay_buffer.sample_list = ckpt['replay_buffer_list']
 
-    num_data = data.shape[0]
     num_batches = len(dataloader)
 
     # Warmup schedule for the model
-    lr_lambda_linear = lambda x: 1.0 if x >= num_batches else x / num_batches * 0.95 + 0.05
-    linearScheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda_linear)
-    lr_lambda_sqrt = lambda x: 1.0 if x < num_batches else 1 / torch.sqrt(torch.tensor(x - num_batches)).to(rank)
-    sqrtScheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda_sqrt)
+    def lr_func(x):
+        if x <= 60:
+            return 1.0
+        else:
+            return 1 / torch.sqrt(torch.tensor(x - 60)).to(rank)
+
+    lrScheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_func)
 
     if resume:
-        linearScheduler.load_state_dict(ckpt['linearScheduler_state_dict'])
-        sqrtScheduler.load_state_dict(ckpt['sqrtScheduler_state_dict'])
+        lrScheduler.load_state_dict(ckpt['lrScheduler_state_dict'])
 
     if rank == 0:
-        summary(model, (1715,))
+        summary(model, (data_size,), batch_size=batch_size_max)
         num_parameters = np.sum([p.numel() for p in model.parameters() if p.requires_grad])
         print("Parameters: {}".format(num_parameters))
         hyperparams['num_parameters'] = num_parameters
@@ -238,7 +310,7 @@ def main(rank, world_size):
     if resume:
         batch_iteration = ckpt['batch_iteration']
     model.train(True)
-    scaler = torch.cuda.amp.GradScaler(init_scale=1e6)
+    scaler = torch.cuda.amp.GradScaler(enabled=False)
     for epoch in range(num_epochs):
         # with torch.cuda.amp.autocast():s
         sampler.set_epoch(epoch)
@@ -246,7 +318,7 @@ def main(rank, world_size):
         reg_avg = 0
         kl_loss_avg = 0
 
-        energy_list_size = batch_size_max * 4 if data.shape[0] > batch_size_max * 4 else data.shape[0]
+        energy_list_size = batch_size_max * 4 if num_examples > batch_size_max * 4 else num_examples
         energy_pos_list = torch.zeros((energy_list_size, 1)).to(rank)
         energy_neg_list = torch.zeros((energy_list_size, 1)).to(rank)
         energy_kl_list = torch.zeros((energy_list_size, 1)).to(rank)
@@ -254,7 +326,8 @@ def main(rank, world_size):
         batch_pbar = tqdm(total=num_batches)
         for pos_x, i in zip(dataloader, range(num_batches)):
             # print("Rank: {}\tBatchnum: {}".format(rank, i))
-            with torch.cuda.amp.autocast():
+            # with torch.autograd.detect_anomaly():
+            with torch.cuda.amp.autocast(enabled=False):
                 optimizer.zero_grad()
                 pos_x = pos_x[0].to(rank)
                 pos_x.requires_grad = True
@@ -306,22 +379,28 @@ def main(rank, world_size):
             loss = ((pos_energy - neg_energy).mean() + energy_regularization + kl_loss)
             # loss.backward()
             scaler.scale(loss).backward()
+
+            # For debugging missing gradients error
+            # for name, p in model.named_parameters():
+            #     if p.grad is None:
+            #         print("found unused param: ")
+            #         print(name)
+            #         print(p)
             # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
             # optimizer.step()
             scaler.step(optimizer)
             scaler.update()
-            linearScheduler.step()
-            sqrtScheduler.step()
+            lrScheduler.step()
 
             # print(linearScheduler.get_last_lr())
             # print(sqrtScheduler.get_last_lr())
 
             if rank == 0:
-                loss_avg += loss.detach() * batch_size / num_data
-                reg_avg += energy_regularization.detach() * batch_size / num_data
+                loss_avg += loss.detach() * batch_size / num_examples
+                reg_avg += energy_regularization.detach() * batch_size / num_examples
                 # print("\n")
                 # print(reg_avg)
-                kl_loss_avg += kl_loss.detach() * batch_size / num_data
+                kl_loss_avg += kl_loss.detach() * batch_size / num_examples
 
                 pos_energy = pos_energy.detach()
                 neg_energy = neg_energy.detach()
@@ -368,7 +447,7 @@ def main(rank, world_size):
                 energy_kl_list -= avg_energy_kl
 
                 # Log to tensorboard every 5 min
-                if (epoch == 0 and i == 2) or time.time() - t_start0 > 300:
+                if (epoch == 0 and i == 3) or time.time() - t_start0 > 300:
                     t_start0 = time.time()
                     # write scalars and histograms
                     writer.add_scalar("loss/total", loss_avg, batch_iteration)
@@ -389,11 +468,15 @@ def main(rank, world_size):
                 #            "loss/max_likelihood": loss_avg - kl_loss_avg,
                 #            "epoch": epoch})
 
-                if (epoch == 0 and i == 2) or time.time() - t_start1 > 1200:
+                # Add histogram every 20 min
+                if (epoch == 0 and i == 3) or time.time() - t_start1 > 1200:
                     t_start1 = time.time()
-                    writer.add_histogram("energy/pos_relative", energy_pos_list, batch_iteration)
-                    writer.add_histogram("energy/neg_relative", energy_neg_list, batch_iteration)
-                    writer.add_histogram("energy_kl_list", energy_kl_list, batch_iteration)
+                    try:
+                        writer.add_histogram("energy/pos_relative", energy_pos_list, batch_iteration)
+                        writer.add_histogram("energy/neg_relative", energy_neg_list, batch_iteration)
+                        writer.add_histogram("energy_kl_list", energy_kl_list, batch_iteration)
+                    except Exception as e:
+                        print(e)
                     try:
                         for name, weight in model.named_parameters():
                             writer.add_histogram("w/" + name, weight, batch_iteration)
@@ -406,14 +489,14 @@ def main(rank, world_size):
                                                         avg_energy_neg,
                                                         avg_energy_neg - avg_energy_pos))
 
-                if (epoch == 0 and i == 2) or time.time() - t_start2 > 3600:
+                # Save checkpoint every hour
+                if (epoch == 0 and i == 3) or time.time() - t_start2 > 3600:
                     t_start2 = time.time()
                     torch.save({'epoch': epoch,
                                 'batch_iteration': batch_iteration,
                                 'model_state_dict': model.state_dict(),
                                 'optimizer_state_dict': optimizer.state_dict(),
-                                'linearScheduler_state_dict': linearScheduler.state_dict(),
-                                'sqrtScheduler_state_dict': sqrtScheduler.state_dict()
+                                'lrScheduler_state_dict': lrScheduler.state_dict()
                                 # 'replay_buffer_list': replay_buffer.sample_list
                                 },
                                path + "/checkpoints/model-{}-{}.pt".format(epoch, i))
