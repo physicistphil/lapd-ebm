@@ -186,7 +186,7 @@ class RGAPressureModule(torch.nn.Module):
         self.relu = torch.nn.ReLU()
         self.dense1 = torch.nn.LazyLinear(seq_length)
         # self.dense2 = torch.nn.LazyLinear(seq_length * 16)
-        self.posWiseNN = PositionWiseFFNN(1, 32, embed_dim)
+        self.posWiseNN = PositionWiseFFNN(1, num_hidden, embed_dim)
 
         self.msiAttnBlocks = torch.nn.ModuleList([
             ResidualAttnBlock(seq_length, embed_dim, num_heads, num_hidden)
@@ -215,7 +215,7 @@ class RGAPressureModule(torch.nn.Module):
         # process the memory using attention
         x_mem = self.seqPosEnc(shared_memory)
         for i, block in enumerate(self.memAttnBlocks):
-            x_mem = block(shared_memory)
+            x_mem = block(x_mem)
 
         # add the memory and the processed diagnostic together
         x = x + x_mem
