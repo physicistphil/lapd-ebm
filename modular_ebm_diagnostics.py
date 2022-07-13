@@ -42,16 +42,17 @@ class AddAndNorm(torch.nn.Module):
         return x
 
 
-# Input shape is (batch size, num_channels/features, seq_length)
+# Input shape is (batch size, seq_length, num_channels/features)
 # Implemented based on "Attention is all you need"
 class PositionWiseFFNN(torch.nn.Module):
     def __init__(self, num_inputs, num_hidden, num_outputs):
         super(PositionWiseFFNN, self).__init__()
 
         # These should automatically move to GPU since they're registered
-        self.dense1 = torch.nn.Linear(num_inputs, num_hidden)
+        # Don't need bias -- layer normalization should take care of that
+        self.dense1 = torch.nn.Linear(num_inputs, num_hidden, bias=False)
         self.relu = torch.nn.ReLU()
-        self.dense2 = torch.nn.Linear(num_hidden, num_outputs)
+        self.dense2 = torch.nn.Linear(num_hidden, num_outputs, bias=False)
 
     def forward(self, x):
         # x = x.transpose(1, 2)
@@ -169,6 +170,142 @@ class MSITimeSeriesModule(torch.nn.Module):
         return x
 
 
+class CNNResidualBlock(torch.nn.Module):
+    def __init__(self, seq_length, embed_dim, kernel_size):
+        super(CNNResidualBlock, self).__init__()
+
+        # CNN setup
+        self.seq_length = seq_length
+        self.embed_dim = out_channels = embed_dim
+        self.kernel_size = kernel_size
+
+        self.relu = torch.nn.ReLU()
+        self.zeroPad = torch.nn.ConstantPad1d((1, 2), 0)
+        self.conv1 = torch.nn.LazyConv1d(out_channels, kernel_size)
+        self.conv2 = torch.nn.LazyConv1d(out_channels, 1)
+        self.conv3 = torch.nn.LazyConv1d(out_channels, kernel_size)
+        self.conv4 = torch.nn.LazyConv1d(out_channels, 1)
+        self.conv5 = torch.nn.LazyConv1d(out_channels, kernel_size)
+        self.conv6 = torch.nn.LazyConv1d(out_channels, 1)
+
+    def forward(self, x):
+        x = x.transpose(1, 2)
+
+        x_temp = x
+        x = self.zeroPad(x)
+        x = self.conv1(x)
+        x = self.relu(x)
+        x = self.conv2(x)
+        x = x + x_temp
+
+        x_temp = x
+        x = self.zeroPad(x)
+        x = self.conv3(x)
+        x = self.relu(x)
+        x = self.conv4(x)
+        x = x + x_temp
+
+        x_temp = x
+        x = self.zeroPad(x)
+        x = self.conv5(x)
+        x = self.relu(x)
+        x = self.conv6(x)
+        # x = x + x_temp
+
+        x = x.transpose(1, 2)
+
+        return x
+
+
+class MSICNNModule(torch.nn.Module):
+    def __init__(self, seq_length, embed_dim, kernel_size):
+        super(MSICNNModule, self).__init__()
+
+        # CNN setup
+        self.seq_length = seq_length
+        self.embed_dim = out_channels = embed_dim
+        self.kernel_size = kernel_size
+        self.zeroPad = torch.nn.ConstantPad1d((1, 2), 0)
+
+        # Signal processing branch
+        # self.relu = torch.nn.ReLU()
+        # self.conv1 = torch.nn.LazyConv1d(out_channels, kernel_size)
+        # self.conv2 = torch.nn.LazyConv1d(out_channels, kernel_size)
+        # self.dense1 = torch.nn.LazyLinear(seq_length * embed_dim, bias=True)
+
+        self.msiBlock = CNNResidualBlock(seq_length, embed_dim, kernel_size)
+        self.memBlock = CNNResidualBlock(seq_length, embed_dim, kernel_size)
+        self.sumBlock = CNNResidualBlock(seq_length, embed_dim, kernel_size)
+
+    def forward(self, x, shared_memory):
+        # x is shape (batch_size, seq_length)
+        # x = torch.unsqueeze(x, 1)  # Make into shape (batch_size, channels, seq_length)
+        # x = self.zeroPad(x)  # Add padding to get CNN output seq length to 256
+        # x = self.conv1(x)
+        # x = self.relu(x)
+        # x = self.zeroPad(x)  # Add padding to get CNN output seq length to 256
+        # x = self.conv2(x)
+        # x = self.relu(x)
+        # x = x.transpose(1, 2)
+        # x = self.pw_ffnn(x)
+        # x = self.relu(x)
+        # x = self.dense1(x.reshape((-1, self.seq_length * self.embed_dim))).reshape((-1, self.seq_length, self.embed_dim))
+        # x = x.transpose(1, 2)
+
+        x = torch.unsqueeze(x, 2)
+        x = self.msiBlock(x)
+        x_mem = self.memBlock(shared_memory)
+        x = self.sumBlock(x + x_mem)
+
+        # x = x + x_mem
+        return x
+
+
+class RGADenseModule(torch.nn.Module):
+    def __init__(self, seq_length, dense_size, embed_dim, kernel_size):
+        super(RGADenseModule, self).__init__()
+        self.embed_dim = out_channels = embed_dim
+        self.kernel_size = kernel_size
+
+        self.seq_length = seq_length
+        self.dense_size = dense_size
+
+        self.zeroPad = torch.nn.ConstantPad1d((1, 2), 0)
+        self.relu = torch.nn.ReLU()
+        self.dense1 = torch.nn.LazyLinear(dense_size, bias=True)
+        self.dense2 = torch.nn.LazyLinear(dense_size, bias=True)
+        self.dense3 = torch.nn.LazyLinear(seq_length * embed_dim, bias=True)
+        # self.mem_conv1 = torch.nn.LazyConv1d(out_channels, kernel_size)
+        # self.mem_conv2 = torch.nn.LazyConv1d(out_channels, kernel_size)
+        # self.mem_pw_ffnn = PositionWiseFFNN(out_channels, 32, out_channels)
+
+        self.memBlock = CNNResidualBlock(seq_length, embed_dim, kernel_size)
+        self.sumBlock = CNNResidualBlock(seq_length, embed_dim, kernel_size)
+
+    def forward(self, x, shared_memory):
+        x = self.dense1(x)
+        x = self.relu(x)
+        x = self.dense2(x)
+        x = self.relu(x)
+        x = self.dense3(x).reshape((-1, self.seq_length, self.embed_dim))
+
+        # x_mem = shared_memory.transpose(1, 2)
+        # x_mem = self.zeroPad(x_mem)  # Add padding to get CNN output seq length to 256
+        # x_mem = self.mem_conv1(x_mem)
+        # x_mem = self.relu(x_mem)
+        # x_mem = self.zeroPad(x_mem)  # Add padding to get CNN output seq length to 256
+        # x_mem = self.mem_conv2(x_mem)
+        # x_mem = self.relu(x_mem)
+        # x_mem = x_mem.transpose(1, 2)
+        # x_mem = self.mem_pw_ffnn(x_mem)
+
+        x_mem = self.memBlock(shared_memory)
+        x = self.sumBlock(x + x_mem)
+
+        # x = x + x_mem
+        return x
+
+
 class RGAPressureModule(torch.nn.Module):
     def __init__(self, seq_length, embed_dim, num_heads, num_hidden,
                  num_msi_attn, num_mem_attn, num_sum_attn):
@@ -184,7 +321,7 @@ class RGAPressureModule(torch.nn.Module):
 
         # Signal processing branch
         self.relu = torch.nn.ReLU()
-        self.dense1 = torch.nn.LazyLinear(seq_length)
+        self.dense1 = torch.nn.LazyLinear(seq_length, bias=False)
         # self.dense2 = torch.nn.LazyLinear(seq_length * 16)
         self.posWiseNN = PositionWiseFFNN(1, num_hidden, embed_dim)
 

@@ -22,6 +22,8 @@ import rich.traceback
 rich.traceback.install()
 
 import sys
+import signal
+from multiprocessing import shared_memory as sm
 
 
 def load_data_old(path):
@@ -77,40 +79,55 @@ class ModularWithRNNBackbone(torch.nn.Module):
 
         # Set model sizes
         self.seq_length = seq_length = 32
-        self.embed_dim = embed_dim = 12
-        num_heads = 2
-        num_hidden = 64
-        num_msi_attn = 2
-        num_mem_attn = 2
-        num_sum_attn = 2
+        self.embed_dim = embed_dim = 16
+        # num_heads = 2
+        # num_hidden = 64
+        # num_msi_attn = 2
+        # num_mem_attn = 2
+        # num_sum_attn = 2
 
-        energy_embed_dim = 12
-        energy_num_heads = 2
-        energy_num_hidden = 64
-        energy_num_attn = 2
+        # energy_embed_dim = 12
+        # energy_num_heads = 2
+        # energy_num_hidden = 64
+        # energy_num_attn = 2
 
-        self.memory_iterations = 2
+        self.memory_iterations = 5
 
+        kernel_size = 4
         # seq_length, num_msi_attn, num_mem_attn, num_sum_attn
-        self.dishargeI = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-                                             num_msi_attn, num_mem_attn, num_sum_attn).cuda()
-        self.dishargeV = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-                                             num_msi_attn, num_mem_attn, num_sum_attn).cuda()
-        self.interferometer = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-                                                  num_msi_attn, num_mem_attn, num_sum_attn).cuda()
-        self.diodes = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-                                          num_msi_attn, num_mem_attn, num_sum_attn).cuda()
-        self.diode_HeII = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-                                              num_msi_attn, num_mem_attn, num_sum_attn).cuda()
-        self.magnets = MagneticFieldModule(seq_length, embed_dim, num_heads, num_hidden,
-                                           num_msi_attn, num_mem_attn, num_sum_attn).cuda()
-        self.RGA = RGAPressureModule(seq_length, embed_dim, num_heads, num_hidden,
-                                     num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        # self.dishargeI = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
+        #                                      num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        # self.dishargeV = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
+        #                                      num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        # self.interferometer = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
+        #                                           num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        # self.diodes = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
+        #                                   num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        # self.diode_HeII = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
+        #                                       num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        # self.magnets = MagneticFieldModule(seq_length, embed_dim, num_heads, num_hidden,
+        #                                    num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        # self.RGA = RGAPressureModule(seq_length, embed_dim, num_heads, num_hidden,
+        #                              num_msi_attn, num_mem_attn, num_sum_attn).cuda()
 
-        self.seqPosEnc = SequencePositionalEncoding(energy_embed_dim, seq_length).cuda()
-        self.attnBlocks = torch.nn.ModuleList([
-            ResidualAttnBlock(seq_length, energy_embed_dim, energy_num_heads, energy_num_hidden).cuda()
-            for i in range(energy_num_attn)])
+        self.dishargeI = MSICNNModule(seq_length, embed_dim, kernel_size)
+        self.dishargeV = MSICNNModule(seq_length, embed_dim, kernel_size)
+        self.interferometer = MSICNNModule(seq_length, embed_dim, kernel_size)
+        self.diodes = MSICNNModule(seq_length, embed_dim, kernel_size)
+        # self.diode1 = MSICNNModule(seq_length, embed_dim, kernel_size)
+        # self.diode2 = MSICNNModule(seq_length, embed_dim, kernel_size)
+        # self.diode3 = MSICNNModule(seq_length, embed_dim, kernel_size)
+        self.diode_HeII = MSICNNModule(seq_length, embed_dim, kernel_size)
+        self.magnets = RGADenseModule(seq_length, 64, embed_dim, kernel_size)
+        self.RGA = RGADenseModule(seq_length, 64, embed_dim, kernel_size)
+
+        # self.seqPosEnc = SequencePositionalEncoding(energy_embed_dim, seq_length).cuda()
+        # self.attnBlocks = torch.nn.ModuleList([
+        #     ResidualAttnBlock(seq_length, energy_embed_dim, energy_num_heads, energy_num_hidden).cuda()
+        #     for i in range(energy_num_attn)])
+
+        self.memBlock1 = CNNResidualBlock(seq_length, embed_dim, kernel_size)
+        self.memBlock2 = CNNResidualBlock(seq_length, embed_dim, kernel_size)
 
         self.softmax = torch.nn.Softmax(dim=1)  # softmax over the seq_length
         self.linear = torch.nn.LazyLinear(1)
@@ -157,10 +174,13 @@ class ModularWithRNNBackbone(torch.nn.Module):
                              self.RGA(p_x, shared_memory_temp) * p_on)
             shared_memory_temp = shared_memory
 
-        shared_memory = self.seqPosEnc(shared_memory)
+        # shared_memory = self.seqPosEnc(shared_memory)
 
-        for i, block in enumerate(self.attnBlocks):
-            shared_memory = block(shared_memory)
+        # for i, block in enumerate(self.attnBlocks):
+        #     shared_memory = block(shared_memory)
+
+        shared_memory = self.memBlock1(shared_memory)
+        shared_memory = self.memBlock2(shared_memory)
 
         shared_memory = self.softmax(shared_memory)
         shared_memory = self.linear(shared_memory.reshape(batch_size, -1))
@@ -182,6 +202,8 @@ def cleanup():
 
 def main(rank, world_size):
     setup(rank, world_size)
+    sh_mem = sm.SharedMemory(name="exit_mem")
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     identifier = datetime.datetime.now().strftime('%Y-%m-%d_%Hh-%Mm-%Ss')
     project_name = "modular_ebm"
@@ -192,8 +214,8 @@ def main(rank, world_size):
         os.mkdir(path + "/checkpoints")
         os.mkdir(path + "/plots")
         shutil.copy(project_name + ".py", path + "/" + project_name + "_copy.py")
-        shutil.copy(project_name + "_sampling.py", path + "/" + project_name + "sampling_copy.py")
-        shutil.copy(project_name + "_diagnostics.py", path + "/" + project_name + "diagnostics_copy.py")
+        shutil.copy(project_name + "_sampling.py", path + "/" + project_name + "_sampling.py")
+        shutil.copy(project_name + "_diagnostics.py", path + "/" + project_name + "_diagnostics.py")
 
     hyperparams = {
         "num_epochs": 1,
@@ -206,8 +228,8 @@ def main(rank, world_size):
         "noise_scale": 5e-3,
         "augment_data": True,
 
-        "batch_size_max": 192,
-        "lr": 1e-4,
+        "batch_size_max": 1024,
+        "lr": 1e-5,
 
         "kl_weight_energy": 1e0,
         "kl_weight_entropy": 1e0,
@@ -267,12 +289,14 @@ def main(rank, world_size):
                                                               drop_last=False)
     dataloader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(data),
                                              batch_size=batch_size_max, shuffle=False,
-                                             num_workers=1, pin_memory=False, sampler=sampler)
+                                             num_workers=4, pin_memory=True, sampler=sampler)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay,
                                   betas=(0.0, 0.999))
     del data
 
-    replay_buffer = ReplayBuffer(replay_size, torch.rand((replay_size, data_size)).to(rank) * 2 - 1)
+    replay_buffer_init_data = torch.cat((torch.rand((replay_size, data_size - 10)) * 2 - 1,
+                                         torch.ones((replay_size, 10))), dim=1).to(rank)
+    replay_buffer = ReplayBuffer(replay_size, replay_buffer_init_data)
 
     map_location = {'cuda:%d' % 0: 'cuda:%d' % rank}
     if resume:
@@ -333,25 +357,40 @@ def main(rank, world_size):
                 pos_x.requires_grad = True
                 batch_size = pos_x.shape[0]
 
+                # print(pos_x[0, -11:])
+
                 neg_x = replay_buffer.sample(int(batch_size * replay_frac))
                 if augment_data:
                     neg_x = perturb_samples(neg_x)
-                neg_x_rand = (torch.rand(batch_size - neg_x.shape[0], *list(pos_x.shape[1:])) *
-                              2 - 1).to(rank)
+
+                # print(neg_x[0, -11:])
+
+                # Refill part of the replay buffer with random data
+                neg_x_rand = torch.cat((torch.rand(batch_size - neg_x.shape[0], pos_x.shape[1] - 10) * 2 - 1,
+                                        torch.ones((batch_size - neg_x.shape[0], 10))), dim=1).to(rank)
                 neg_x = torch.cat([neg_x, neg_x_rand], 0)
                 # neg_x = torch.Tensor(neg_x).to(rank)
                 # neg_x = torch.Tensor(neg_x)
                 # neg_x.requires_grad = True  # Needed if not using Langevin_KL sampling
 
+                # print(neg_x[-1, -11:])
+
                 # For calculating the KL loss later
                 num_kl_samples = 100
                 kl_samp = replay_buffer.sample(num_kl_samples)
+
+                # print(kl_samp[0, -11:])
+
+                # ------ PUT DIAGNOSTIC DROPOUT FOR SAMPLES HERE ------ #
 
                 # Run Langevin dynamics on sample
                 neg_x, kl_x = sample_langevin_KL_cuda(neg_x, model, sample_steps=sample_steps,
                                                       kl_backprop_steps=hyperparams["kl_backprop_steps"],
                                                       step_size=step_size, noise_scale=noise_scale)
                 replay_buffer.add(neg_x)  # neg_x already detached in Langevin call above
+
+                # print(neg_x[0, -11:])
+                # print(kl_x[0, -11:])
 
                 # KL loss -- energy part
                 # Don't accumulate grads in the model parameters for the KL loss
@@ -369,14 +408,14 @@ def main(rank, world_size):
                 kl_entropy = -torch.log(kl_entropy + 1e-8).mean()  # Technically missing + ln(2) + C_E
                 kl_loss += kl_entropy * kl_weight_entropy
 
-            # Backwards pass...
-            optimizer.zero_grad()
-            pos_energy = model(pos_x)
-            neg_energy = model(neg_x.to(rank))
-            # neg_energy = model(neg_x)
-            energy_regularization = reg_amount * (pos_energy.square() + neg_energy.square()).mean()
+                # Backwards pass...
+                optimizer.zero_grad()
+                pos_energy = model(pos_x)
+                neg_energy = model(neg_x.to(rank))
+                # neg_energy = model(neg_x)
+                energy_regularization = reg_amount * (pos_energy.square() + neg_energy.square()).mean()
 
-            loss = ((pos_energy - neg_energy).mean() + energy_regularization + kl_loss)
+                loss = ((pos_energy - neg_energy).mean() + energy_regularization + kl_loss)
             # loss.backward()
             scaler.scale(loss).backward()
 
@@ -447,7 +486,7 @@ def main(rank, world_size):
                 energy_kl_list -= avg_energy_kl
 
                 # Log to tensorboard every 5 min
-                if (epoch == 0 and i == 3) or time.time() - t_start0 > 300:
+                if (epoch == 0 and i == 3) or time.time() - t_start0 > 300 or sh_mem.buf[0] == 1:
                     t_start0 = time.time()
                     # write scalars and histograms
                     writer.add_scalar("loss/total", loss_avg, batch_iteration)
@@ -469,7 +508,7 @@ def main(rank, world_size):
                 #            "epoch": epoch})
 
                 # Add histogram every 20 min
-                if (epoch == 0 and i == 3) or time.time() - t_start1 > 1200:
+                if (epoch == 0 and i == 3) or time.time() - t_start1 > 1200 or sh_mem.buf[0] == 1:
                     t_start1 = time.time()
                     try:
                         writer.add_histogram("energy/pos_relative", energy_pos_list, batch_iteration)
@@ -490,7 +529,8 @@ def main(rank, world_size):
                                                         avg_energy_neg - avg_energy_pos))
 
                 # Save checkpoint every hour
-                if (epoch == 0 and i == 3) or time.time() - t_start2 > 3600:
+                if ((epoch == 0 and i == 3) or (epoch == num_epochs - 1 and i == num_batches - 1)
+                    or time.time() - t_start2 > 3600 or sh_mem.buf[0] == 1):
                     t_start2 = time.time()
                     torch.save({'epoch': epoch,
                                 'batch_iteration': batch_iteration,
@@ -503,13 +543,31 @@ def main(rank, world_size):
 
             batch_iteration += 1
             batch_pbar.update(1)
+
+            if sh_mem.buf[0] == 1:
+                print("\n ---- Exiting process ----\n")
+                break
         batch_pbar.close()
         pbar.update(1)
+        if sh_mem.buf[0] == 1:
+            break
     pbar.close()
-
+    sh_mem.close()
+    if rank == 0:
+        wandb.finish()
     cleanup()
 
 
 if __name__ == "__main__":
-    world_size = 2
-    torch.multiprocessing.spawn(main, args=(world_size,), nprocs=world_size)
+    world_size = 1
+    sh_mem = sm.SharedMemory(name="exit_mem", create=True, size=1)
+    sh_mem.buf[0] = 0
+    try:
+        proc_context = torch.multiprocessing.spawn(main, args=(world_size,), nprocs=world_size, join=False)
+        proc_context.join()
+    except KeyboardInterrupt:
+        sh_mem.buf[0] = 1
+        proc_context.join(timeout=30)
+        sh_mem.unlink()
+    else:
+        sh_mem.unlink()

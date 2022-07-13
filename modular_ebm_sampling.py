@@ -47,6 +47,8 @@ def sample_langevin_cuda(x, model, sample_steps=10, step_size=10, noise_scale=0.
 
 
 def sample_langevin_KL_cuda(x, model, sample_steps=10, kl_backprop_steps=5, step_size=10, noise_scale=0.005):
+    gradient_enabled_mask = torch.cat([torch.ones((1, x.shape[1] - 10), device=x.get_device()),
+                                       torch.zeros((1, 10), device=x.get_device())], dim=1)
     for i in range(sample_steps):
         x.requires_grad_(True)  # So gradients are saved
         noise = torch.randn_like(x) * noise_scale
@@ -63,8 +65,9 @@ def sample_langevin_KL_cuda(x, model, sample_steps=10, kl_backprop_steps=5, step
             kl_model_output = model(x_KL + noise)
             kl_gradient = torch.autograd.grad(kl_model_output.sum(), x_KL,
                                               only_inputs=True, create_graph=True)[0]
-            x_KL = x_KL - kl_gradient * step_size
-        x = (x - gradient * step_size).detach()  # Remove the gradients
+            x_KL = x_KL - kl_gradient * step_size * gradient_enabled_mask
+        x = x - gradient * step_size * gradient_enabled_mask
+        x = x.detach()  # Remove the gradients
 
     return x, x_KL
 
@@ -75,4 +78,5 @@ def perturb_samples(samples):
     rand_mulitplier = torch.rand_like(samples[:, 0])[:, None] * 1.0 + 0.5
 
     # Not sure what the order of operations should be here
-    return samples * rand_mulitplier + rand_gaussian
+    samples[:, 0:-10] = samples[:, 0:-10] * rand_mulitplier[:] + rand_gaussian[:, 0:-10]
+    return samples
