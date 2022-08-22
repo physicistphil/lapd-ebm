@@ -79,55 +79,58 @@ class ModularWithRNNBackbone(torch.nn.Module):
 
         # Set model sizes
         self.seq_length = seq_length = 32
-        self.embed_dim = embed_dim = 16
-        # num_heads = 2
-        # num_hidden = 64
-        # num_msi_attn = 2
-        # num_mem_attn = 2
-        # num_sum_attn = 2
+        self.embed_dim = embed_dim = 512
+        self.dense_width = dense_width = 512
 
-        # energy_embed_dim = 12
-        # energy_num_heads = 2
-        # energy_num_hidden = 64
-        # energy_num_attn = 2
+        num_heads = 16
+        num_hidden = 256
+        num_msi_attn = 3
+        num_mem_attn = 3
+        num_sum_attn = 3
+        energy_embed_dim = self.embed_dim
+        energy_num_heads = 16
+        energy_num_hidden = 512
+        energy_num_attn = 4
 
-        self.memory_iterations = 5
+        self.memory_iterations = 1
 
-        kernel_size = 4
         # seq_length, num_msi_attn, num_mem_attn, num_sum_attn
-        # self.dishargeI = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-        #                                      num_msi_attn, num_mem_attn, num_sum_attn).cuda()
-        # self.dishargeV = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-        #                                      num_msi_attn, num_mem_attn, num_sum_attn).cuda()
-        # self.interferometer = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-        #                                           num_msi_attn, num_mem_attn, num_sum_attn).cuda()
-        # self.diodes = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-        #                                   num_msi_attn, num_mem_attn, num_sum_attn).cuda()
-        # self.diode_HeII = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-        #                                       num_msi_attn, num_mem_attn, num_sum_attn).cuda()
-        # self.magnets = MagneticFieldModule(seq_length, embed_dim, num_heads, num_hidden,
-        #                                    num_msi_attn, num_mem_attn, num_sum_attn).cuda()
-        # self.RGA = RGAPressureModule(seq_length, embed_dim, num_heads, num_hidden,
-        #                              num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        self.dishargeI = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
+                                             num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        self.dishargeV = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
+                                             num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        self.interferometer = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
+                                                  num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        self.diodes = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
+                                          num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        self.diode_HeII = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
+                                              num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        self.magnets = MagneticFieldModule(dense_width, seq_length, embed_dim, num_heads, num_hidden,
+                                           num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+        self.RGA = RGAPressureModule(dense_width, seq_length, embed_dim, num_heads, num_hidden,
+                                     num_msi_attn, num_mem_attn, num_sum_attn).cuda()
 
-        self.dishargeI = MSICNNModule(seq_length, embed_dim, kernel_size)
-        self.dishargeV = MSICNNModule(seq_length, embed_dim, kernel_size)
-        self.interferometer = MSICNNModule(seq_length, embed_dim, kernel_size)
-        self.diodes = MSICNNModule(seq_length, embed_dim, kernel_size)
+        self.seqPosEnc = SequencePositionalEncoding(energy_embed_dim, seq_length).cuda()
+        self.attnBlocks = torch.nn.ModuleList([
+            ResidualAttnBlock(seq_length, energy_embed_dim, energy_num_heads, energy_num_hidden).cuda()
+            for i in range(energy_num_attn)])
+
+        self.realCoordEnc = DiagnosticPositionModule(3, 32, seq_length).cuda()
+
+        # kernel_size = 4
+        # self.dishargeI = MSICNNModule(seq_length, embed_dim, kernel_size)
+        # self.dishargeV = MSICNNModule(seq_length, embed_dim, kernel_size)
+        # self.interferometer = MSICNNModule(seq_length, embed_dim, kernel_size)
+        # self.diodes = MSICNNModule(seq_length, embed_dim, kernel_size)
         # self.diode1 = MSICNNModule(seq_length, embed_dim, kernel_size)
         # self.diode2 = MSICNNModule(seq_length, embed_dim, kernel_size)
         # self.diode3 = MSICNNModule(seq_length, embed_dim, kernel_size)
-        self.diode_HeII = MSICNNModule(seq_length, embed_dim, kernel_size)
-        self.magnets = RGADenseModule(seq_length, 64, embed_dim, kernel_size)
-        self.RGA = RGADenseModule(seq_length, 64, embed_dim, kernel_size)
+        # self.diode_HeII = MSICNNModule(seq_length, embed_dim, kernel_size)
+        # self.magnets = RGADenseModule(seq_length, 64, embed_dim, kernel_size)
+        # self.RGA = RGADenseModule(seq_length, 64, embed_dim, kernel_size)
 
-        # self.seqPosEnc = SequencePositionalEncoding(energy_embed_dim, seq_length).cuda()
-        # self.attnBlocks = torch.nn.ModuleList([
-        #     ResidualAttnBlock(seq_length, energy_embed_dim, energy_num_heads, energy_num_hidden).cuda()
-        #     for i in range(energy_num_attn)])
-
-        self.memBlock1 = CNNResidualBlock(seq_length, embed_dim, kernel_size)
-        self.memBlock2 = CNNResidualBlock(seq_length, embed_dim, kernel_size)
+        # self.memBlock1 = CNNResidualBlock(seq_length, embed_dim, kernel_size)
+        # self.memBlock2 = CNNResidualBlock(seq_length, embed_dim, kernel_size)
 
         self.softmax = torch.nn.Softmax(dim=1)  # softmax over the seq_length
         self.linear = torch.nn.LazyLinear(1)
@@ -159,28 +162,44 @@ class ModularWithRNNBackbone(torch.nn.Module):
 
         batch_size = I_x.shape[0]
 
-        shared_memory_temp = torch.zeros((batch_size, self.seq_length, self.embed_dim)).to(device)
+        d0_pos = self.realCoordEnc(torch.tensor([0.12, ]).to(device))
+        d1_pos = self.realCoordEnc(torch.tensor([0.22, ]).to(device))
+        d2_pos = self.realCoordEnc(torch.tensor([0.34, ]).to(device))
+        d3_pos = self.realCoordEnc(torch.tensor([0.46, ]).to(device))
+        d4_pos = self.realCoordEnc(torch.tensor([0.10, ]).to(device))
+
+        shared_memory = torch.zeros((batch_size, self.seq_length, self.embed_dim)).to(device)
         for i in range(self.memory_iterations):
-            shared_memory = torch.zeros((batch_size, self.seq_length, self.embed_dim)).to(device)
-            shared_memory = (self.dishargeI(I_x, shared_memory_temp) * I_on +
-                             self.dishargeV(V_x, shared_memory_temp) * V_on +
-                             self.interferometer(n_x, shared_memory_temp) * n_on +
-                             self.diodes(d0_x, shared_memory_temp) * d0_on +
-                             self.diodes(d1_x, shared_memory_temp) * d1_on +
-                             self.diodes(d2_x, shared_memory_temp) * d2_on +
-                             self.diodes(d3_x, shared_memory_temp) * d3_on +
-                             self.diode_HeII(d4_x, shared_memory_temp) * d4_on +
-                             self.magnets(B_x, shared_memory_temp) * B_on +
-                             self.RGA(p_x, shared_memory_temp) * p_on)
-            shared_memory_temp = shared_memory
+            shared_memory = torch.cat([self.dishargeI(I_x, shared_memory) * I_on,
+                             self.dishargeV(V_x, shared_memory) * V_on,
+                             self.interferometer(n_x, shared_memory) * n_on,
+                             self.diodes(d0_x + d0_pos, shared_memory) * d0_on,
+                             self.diodes(d1_x + d1_pos, shared_memory) * d1_on,
+                             self.diodes(d2_x + d2_pos, shared_memory) * d2_on,
+                             self.diodes(d3_x + d3_pos, shared_memory) * d3_on,
+                             self.diode_HeII(d4_x + d4_pos, shared_memory) * d4_on,
+                             self.magnets(B_x, shared_memory) * B_on,
+                             self.RGA(p_x, shared_memory) * p_on], dim=0)
 
-        # shared_memory = self.seqPosEnc(shared_memory)
+        # shared_memory = torch.zeros((batch_size, self.seq_length, self.embed_dim)).to(device)
+        # for i in range(self.memory_iterations):
+        #     shared_memory = (self.dishargeI(I_x, shared_memory) * I_on +
+        #                       self.dishargeV(V_x, shared_memory) * V_on +
+        #                       self.interferometer(n_x, shared_memory) * n_on +
+        #                       self.diodes(d0_x + d0_pos, shared_memory) * d0_on +
+        #                       self.diodes(d1_x + d1_pos, shared_memory) * d1_on +
+        #                       self.diodes(d2_x + d2_pos, shared_memory) * d2_on +
+        #                       self.diodes(d3_x + d3_pos, shared_memory) * d3_on +
+        #                       self.diode_HeII(d4_x + d4_pos, shared_memory) * d4_on +
+        #                       self.magnets(B_x, shared_memory) * B_on +
+        #                       self.RGA(p_x, shared_memory) * p_on)
 
-        # for i, block in enumerate(self.attnBlocks):
-        #     shared_memory = block(shared_memory)
+        shared_memory = self.seqPosEnc(shared_memory)
+        for i, block in enumerate(self.attnBlocks):
+            shared_memory = block(shared_memory)
 
-        shared_memory = self.memBlock1(shared_memory)
-        shared_memory = self.memBlock2(shared_memory)
+        # shared_memory = self.memBlock1(shared_memory_temp)
+        # shared_memory = self.memBlock2(shared_memory)
 
         shared_memory = self.softmax(shared_memory)
         shared_memory = self.linear(shared_memory.reshape(batch_size, -1))
@@ -228,7 +247,7 @@ def main(rank, world_size):
         "noise_scale": 5e-3,
         "augment_data": True,
 
-        "batch_size_max": 1024,
+        "batch_size_max": 32,
         "lr": 1e-5,
 
         "kl_weight_energy": 1e0,
@@ -320,7 +339,7 @@ def main(rank, world_size):
         lrScheduler.load_state_dict(ckpt['lrScheduler_state_dict'])
 
     if rank == 0:
-        summary(model, (data_size,), batch_size=batch_size_max)
+        # summary(model, (data_size,), batch_size=batch_size_max)
         num_parameters = np.sum([p.numel() for p in model.parameters() if p.requires_grad])
         print("Parameters: {}".format(num_parameters))
         hyperparams['num_parameters'] = num_parameters
@@ -328,7 +347,7 @@ def main(rank, world_size):
                    group="", job_type="",
                    config=hyperparams)
 
-    t_start0 = t_start1 = t_start2 = time.time()
+    t_start0 = t_start1 = t_start2 = t_start_autoclose = time.time()
     pbar = tqdm(total=num_epochs)
     batch_iteration = 0
     if resume:
@@ -475,6 +494,10 @@ def main(rank, world_size):
 
             # Longer-term metrics
             if rank == 0:
+                # End training after fixed amount of time
+                if time.time() - t_start_autoclose > 3600 * 7:
+                    sh_mem.buf[0] = 1
+
                 # scalars
                 avg_energy_pos = energy_pos_list.mean()
                 avg_energy_neg = energy_neg_list.mean()
@@ -536,8 +559,8 @@ def main(rank, world_size):
                                 'batch_iteration': batch_iteration,
                                 'model_state_dict': model.state_dict(),
                                 'optimizer_state_dict': optimizer.state_dict(),
-                                'lrScheduler_state_dict': lrScheduler.state_dict()
-                                # 'replay_buffer_list': replay_buffer.sample_list
+                                'lrScheduler_state_dict': lrScheduler.state_dict(),
+                                'replay_buffer_list': replay_buffer.sample(128)
                                 },
                                path + "/checkpoints/model-{}-{}.pt".format(epoch, i))
 

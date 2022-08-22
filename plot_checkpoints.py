@@ -10,7 +10,7 @@ import re
 from collections import OrderedDict
 import sys
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 import matplotlib as mpl
 plt.style.use(['dark_background'])
@@ -212,13 +212,14 @@ def plot_diagnostics_histogram(data_samps, data, ptp):
     plt.tight_layout()
 
 
-def plot_energy_histogram(data, data_samps):
+def plot_energy_histogram(data, data_samps, n_samp, n_samp_divis):
     n_bins = 201
     fig, axes = plt.subplots(1, 1, figsize=(8, 6), dpi=200)
     plt.title('Energy histogram')
-    axes.hist(model(data[np.random.randint(0, data.shape[0], 96)].to(device)).to('cpu').detach().numpy(),
+    axes.hist(np.concatenate([model(data[np.random.randint(0, data.shape[0], n_samp)].to(device)).to('cpu').detach().numpy() for i in range(n_samp_divis)], 0),
               bins=n_bins, density=True, color=data_color)
-    axes.hist(model(torch.tensor(data_samps).to(device)).to('cpu').detach().numpy(), bins=n_bins, density=True,
+    axes.hist(np.concatenate([model(torch.tensor(data_samps[i::n_samp_divis]).to(device)).to('cpu').detach().numpy() for i in range(n_samp_divis)], 0),
+              bins=n_bins, density=True,
               color=aux_color)
 
 
@@ -230,10 +231,10 @@ def conditionally_sample(init_data, n_samp, steps, step_size, noise, samp_begin,
     conditional_mask[:, samp_begin:samp_end] = torch.ones((1, samp_end - samp_begin), device=device)
 
     for i in tqdm(range(3)):
-        if includes_flags:
-            data_samps[:, samp_begin:samp_end - 10] = perturb_samples(data_samps[:, samp_begin:samp_end - 10])
-        else:
-            data_samps[:, samp_begin:samp_end] = perturb_samples(data_samps[:, samp_begin:samp_end])
+        # if includes_flags:
+        #     data_samps[:, samp_begin:samp_end - 10] = perturb_samples(data_samps[:, samp_begin:samp_end - 10])
+        # else:
+        #     data_samps[:, samp_begin:samp_end] = perturb_samples(data_samps[:, samp_begin:samp_end])
         data_samps = sample_langevin_cuda_tqdm(data_samps, model, step_size=step_size, sample_steps=steps,
                                                noise_scale=noise, conditional_mask=conditional_mask)
     data_samps = data_samps.to('cpu').detach().numpy()
@@ -257,9 +258,11 @@ if __name__ == '__main__':
 
     # filepaths = filepaths[133:]
     filepaths = [
-                 # '2022-07-13_11h-31m-02s/checkpoints/model-0-3.pt',
-                 # '2022-07-13_11h-31m-02s/checkpoints/model-0-352.pt',
-                 '2022-07-13_11h-31m-02s/checkpoints/model-0-700.pt'
+                 '2022-08-19_01h-51m-13s/checkpoints/model-0-3032.pt',
+                 '2022-08-19_01h-51m-13s/checkpoints/model-0-2024.pt',
+                 '2022-08-19_01h-51m-13s/checkpoints/model-0-1016.pt',
+                 # '2022-08-19_01h-51m-13s/checkpoints/model-0-510.pt',
+                 # '2022-08-19_01h-51m-13s/checkpoints/model-0-3.pt'
                  ]
 
     for f in filepaths:
@@ -329,24 +332,45 @@ if __name__ == '__main__':
             ptp = np.load(data_path)['scale']
             datasize = data.shape[1]
 
+            n_samp_total = 128
+            n_samp_divis = 2
+            n_samp = n_samp_total // n_samp_divis
+
+            data_valid_idx = 50123
+            if 'replay_buffer_list' in list(ckpt.keys()):
+                buff_samps = ckpt['replay_buffer_list'].detach().cpu().numpy()
+                print(buff_samps.shape)
+                print("Plotting replay buffer...")
+                plot_all_msi(buff_samps, data_valid, data_valid_idx, ptp)
+                plt.savefig("experiments_modular/" + identifier + "/plots/buffer_traces-" + model_num + ".png")
+                plot_energy_histogram(data, buff_samps, buff_samps.shape[0] // 8, 8)
+                plt.savefig("experiments_modular/" + identifier + "/plots/buffer_energies-" + model_num + ".png")
+                plot_diagnostics_histogram(buff_samps, data, ptp)
+                plt.savefig("experiments_modular/" + identifier + "/plots/buffer_hist-" + model_num + ".png")
+
+            # continue
+
             # replay_buffer = ReplayBuffer(ckpt['replay_buffer_list'].shape[0], np.random.randn(*data.shape))
             # replay_buffer.sample_list = ckpt['replay_buffer_list']
             print("Number of parameters: {}. ".format(np.sum([p.numel() for p in model.parameters() if p.requires_grad])))
 
             print("Unconditional sampling...")
 
-            n_samp = 96
             steps = sample_steps * 2
             step_size = step_size
             noise = noise_scale
+            # noise = 0
 
             # data_valid_idx = 15000
             data_valid_idx = 50123
             samp_begin = 32 * 0
-            samp_end = datasize
+            samp_end = datasize - 10
 
             init_data = data_valid[data_valid_idx].clone().detach().repeat((n_samp, 1)).to(device)
-            data_samps = conditionally_sample(init_data, n_samp, steps, step_size, noise, samp_begin, samp_end, includes_flags=True)
+            data_samps = []
+            for i in range(n_samp_divis):
+                data_samps.append(conditionally_sample(init_data, n_samp, steps, step_size, noise, samp_begin, samp_end, includes_flags=True))
+            data_samps = np.concatenate(data_samps, 0)
 
             print("Plotting unconditional samples")
 
@@ -355,7 +379,7 @@ if __name__ == '__main__':
 
             # ------ Plot energy histrogram ------ #
 
-            plot_energy_histogram(data, data_samps)
+            plot_energy_histogram(data, data_samps, n_samp, n_samp_divis)
             plt.savefig("experiments_modular/" + identifier + "/plots/energies-unconditional-" + model_num + ".png")
 
             # ------ Plot Diagnostics histogram ------ #
@@ -367,11 +391,14 @@ if __name__ == '__main__':
             data_valid_idx = 50123
             samp_begin = 32 * 0
             samp_end = 32 * 8
-            data_samps = conditionally_sample(init_data, n_samp, steps, step_size, noise, samp_begin, samp_end, includes_flags=False)
+            data_samps = []
+            for i in range(n_samp_divis):
+                data_samps.append(conditionally_sample(init_data, n_samp, steps, step_size, noise, samp_begin, samp_end, includes_flags=False))
+            data_samps = np.concatenate(data_samps, 0)
             print("Plotting conditional samples")
             plot_all_msi(data_samps, data_valid, data_valid_idx, ptp)
             plt.savefig("experiments_modular/" + identifier + "/plots/traces-conditional-" + model_num + ".png")
-            plot_energy_histogram(data, data_samps)
+            plot_energy_histogram(data, data_samps, n_samp, n_samp_divis)
             plt.savefig("experiments_modular/" + identifier + "/plots/energies-conditional-" + model_num + ".png")
             plot_diagnostics_histogram(data_samps, data, ptp)
             plt.savefig("experiments_modular/" + identifier + "/plots/hist-conditional-" + model_num + ".png")
@@ -380,7 +407,10 @@ if __name__ == '__main__':
             data_valid_idx = 50123
             samp_begin = 32 * 5
             samp_end = 32 * 6
-            data_samps = conditionally_sample(init_data, n_samp, steps, step_size, noise, samp_begin, samp_end, includes_flags=False)
+            data_samps = []
+            for i in range(n_samp_divis):
+                data_samps.append(conditionally_sample(init_data, n_samp, steps, step_size, noise, samp_begin, samp_end, includes_flags=False))
+            data_samps = np.concatenate(data_samps, 0)
             range_begin = 32 * 5
             range_end = 32 * (5 + 1)
             data_sub_samps = data_samps[:, range_begin:range_end]
@@ -404,7 +434,7 @@ if __name__ == '__main__':
             plt.tight_layout()
             plt.savefig("experiments_modular/" + identifier + "/plots/traces-single-" + model_num + ".png")
 
-            plot_energy_histogram(data, data_samps)
+            plot_energy_histogram(data, data_samps, n_samp, n_samp_divis)
             plt.savefig("experiments_modular/" + identifier + "/plots/energies-single-" + model_num + ".png")
             plt.close('all')
 

@@ -1,5 +1,5 @@
 import torch
-
+from functools import partial
 
 # class DiagnosticPositionModule(torch.nn.Module):
 #     def __init__(self):
@@ -102,6 +102,30 @@ class SequencePositionalEncoding(torch.nn.Module):
         return x
 
 
+class DiagnosticPositionModule(torch.nn.Module):
+    def __init__(self, num_layers, width_layer, out_size):
+        super(DiagnosticPositionModule, self).__init__()
+
+        self.num_layers = num_layers
+        self.width_layer = width_layer
+        self.out_size = out_size
+
+        self.relu = torch.nn.ReLU()
+        self.dense = partial(torch.nn.LazyLinear, self.width_layer, bias=True)
+        self.dense_out = torch.nn.LazyLinear(self.out_size)
+
+        self.layers = torch.nn.ModuleList([self.dense() for i in range(self.num_layers)])
+
+    # x is the position of the diagnostic. Maybe include which direction it's pointing?
+    def forward(self, x):
+        for i, l in enumerate(self.layers):
+            x = l(x)
+            x = self.relu(x)
+        x = self.dense_out(x)
+
+        return x
+
+
 # memory is shape batch x seq_length x embed_dim
 class MSITimeSeriesModule(torch.nn.Module):
     def __init__(self, seq_length, embed_dim, num_heads, num_hidden,
@@ -139,9 +163,10 @@ class MSITimeSeriesModule(torch.nn.Module):
     # pos_module: module encoding the physical position of the diagnostic
     # ^ these will be included later
     # orient_module: module encoding the orientation of the diagnostic
-    def forward(self, x, shared_memory):
+    def forward(self, x, shared_memory, unsqueeze=True):
         # x is shape (batch_size, seq_length)
-        x = torch.unsqueeze(x, 1)  # Make into shape (batch_size, channels, seq_length)
+        if unsqueeze:
+            x = torch.unsqueeze(x, 1)  # Make into shape (batch_size, channels, seq_length)
         x = self.zeroPad(x)  # Add padding to get CNN output seq length to 256
         x = self.conv1(x)
         x = self.zeroPad(x)  # Add padding to get CNN output seq length to 256
@@ -187,6 +212,8 @@ class CNNResidualBlock(torch.nn.Module):
         self.conv4 = torch.nn.LazyConv1d(out_channels, 1)
         self.conv5 = torch.nn.LazyConv1d(out_channels, kernel_size)
         self.conv6 = torch.nn.LazyConv1d(out_channels, 1)
+        self.dense1 = torch.nn.LazyLinear(64)
+        self.dense2 = torch.nn.LazyLinear(seq_length * embed_dim)
 
     def forward(self, x):
         x = x.transpose(1, 2)
@@ -213,6 +240,12 @@ class CNNResidualBlock(torch.nn.Module):
         # x = x + x_temp
 
         x = x.transpose(1, 2)
+
+        x = self.dense1(x.reshape(-1, self.seq_length * self.embed_dim))
+        x = self.relu(x)
+        x = self.dense2(x)
+        x = self.relu(x)
+        x = x.reshape((-1, self.seq_length, self.embed_dim))
 
         return x
 
@@ -307,10 +340,11 @@ class RGADenseModule(torch.nn.Module):
 
 
 class RGAPressureModule(torch.nn.Module):
-    def __init__(self, seq_length, embed_dim, num_heads, num_hidden,
+    def __init__(self, dense_width, seq_length, embed_dim, num_heads, num_hidden,
                  num_msi_attn, num_mem_attn, num_sum_attn):
         super(RGAPressureModule, self).__init__()
 
+        self.dense_width = dense_width
         self.seq_length = seq_length
         # embed_dim = 16
         # Attention setup
@@ -321,9 +355,10 @@ class RGAPressureModule(torch.nn.Module):
 
         # Signal processing branch
         self.relu = torch.nn.ReLU()
-        self.dense1 = torch.nn.LazyLinear(seq_length, bias=False)
-        # self.dense2 = torch.nn.LazyLinear(seq_length * 16)
-        self.posWiseNN = PositionWiseFFNN(1, num_hidden, embed_dim)
+        self.dense1 = torch.nn.LazyLinear(dense_width)
+        self.dense2 = torch.nn.LazyLinear(dense_width)
+        # self.linearExpander = torch.nn.LazyLinear(seq_length, bias=False)
+        self.posWiseNN = PositionWiseFFNN(dense_width // seq_length, num_hidden, embed_dim)
 
         self.msiAttnBlocks = torch.nn.ModuleList([
             ResidualAttnBlock(seq_length, embed_dim, num_heads, num_hidden)
@@ -340,8 +375,9 @@ class RGAPressureModule(torch.nn.Module):
     def forward(self, x, shared_memory):
         x = self.dense1(x)
         x = self.relu(x)
-        # x = self.dense2(x)
-        x = self.posWiseNN(x.reshape(-1, self.seq_length, 1))
+        x = self.dense2(x)
+        # x = self.linearExpander(x)
+        x = self.posWiseNN(x.reshape(-1, self.seq_length, self.dense_width // self.seq_length))
         # x = x.reshape(-1, self.seq_length, 16)
         x = self.seqPosEnc(x)
 
@@ -366,20 +402,28 @@ class RGAPressureModule(torch.nn.Module):
 
 
 class MagneticFieldModule(torch.nn.Module):
-    def __init__(self, seq_length, embed_dim, num_heads, num_hidden,
+    def __init__(self, dense_width, seq_length, embed_dim, num_heads, num_hidden,
                  num_msi_attn, num_mem_attn, num_sum_attn):
         super(MagneticFieldModule, self).__init__()
 
+        self.dense_width = dense_width
         self.seq_length = seq_length
 
-        self.linearExpander = torch.nn.LazyLinear(seq_length)
+        self.relu = torch.nn.ReLU()
+        self.dense1 = torch.nn.LazyLinear(dense_width)
+        self.dense2 = torch.nn.LazyLinear(dense_width)
+        # Don't need to multiply by embed_dim because the time series module takes care of that
+        # self.linearExpander = torch.nn.LazyLinear(seq_length, bias=False)
         self.msiProcessor = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
                                                 num_msi_attn, num_mem_attn, num_sum_attn)
 
     def forward(self, x, shared_memory):
-        x = self.linearExpander(x)
-        x = x.reshape(-1, self.seq_length)
-        x = self.msiProcessor(x, shared_memory)
+        x = self.dense1(x)
+        x = self.relu(x)
+        x = self.dense2(x)
+        # x = self.linearExpander(x)
+        x = x.reshape(-1, self.dense_width // self.seq_length, self.seq_length)
+        x = self.msiProcessor(x, shared_memory, unsqueeze=False)
         return x
 
 
