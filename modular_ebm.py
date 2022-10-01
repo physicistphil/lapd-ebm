@@ -11,6 +11,8 @@ import datetime
 import time
 import shutil
 import importlib
+import argparse
+import json
 # import matplotlib.pyplot as plt
 # import matplotlib.animation as ani
 
@@ -74,45 +76,45 @@ def load_data(path):
 
 
 class ModularWithRNNBackbone(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, hyperparams):
         super(ModularWithRNNBackbone, self).__init__()
 
         # Set model sizes
-        self.seq_length = seq_length = 32
-        self.embed_dim = embed_dim = 512
-        self.dense_width = dense_width = 512
+        self.seq_length = seq_length = hyperparams["seq_length"]
+        self.embed_dim = embed_dim = hyperparams["embed_dim"]
+        self.dense_width = dense_width = hyperparams["dense_width"]
 
-        num_heads = 16
-        num_hidden = 256
-        num_msi_attn = 3
-        num_mem_attn = 3
-        num_sum_attn = 3
+        num_heads = hyperparams["num_heads"]
+        num_hidden = hyperparams["num_hidden"]
+        num_msi_attn = hyperparams["num_msi_attn"]
+        # num_mem_attn = 3
+        # num_sum_attn = 3
         energy_embed_dim = self.embed_dim
-        energy_num_heads = 16
-        energy_num_hidden = 512
-        energy_num_attn = 4
+        energy_num_heads = hyperparams["energy_num_heads"]
+        energy_num_hidden = hyperparams["energy_num_hidden"]
+        energy_num_attn = hyperparams["energy_num_attn"]
 
-        self.memory_iterations = 1
+        # self.memory_iterations = 1
 
         # seq_length, num_msi_attn, num_mem_attn, num_sum_attn
         self.dishargeI = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-                                             num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+                                             num_msi_attn).cuda()
         self.dishargeV = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-                                             num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+                                             num_msi_attn).cuda()
         self.interferometer = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-                                                  num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+                                                  num_msi_attn).cuda()
         self.diodes = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-                                          num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+                                          num_msi_attn).cuda()
         self.diode_HeII = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-                                              num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+                                              num_msi_attn).cuda()
         self.magnets = MagneticFieldModule(dense_width, seq_length, embed_dim, num_heads, num_hidden,
-                                           num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+                                           num_msi_attn).cuda()
         self.RGA = RGAPressureModule(dense_width, seq_length, embed_dim, num_heads, num_hidden,
-                                     num_msi_attn, num_mem_attn, num_sum_attn).cuda()
+                                     num_msi_attn).cuda()
 
-        self.seqPosEnc = SequencePositionalEncoding(energy_embed_dim, seq_length).cuda()
+        self.seqPosEnc = SequencePositionalEncoding(energy_embed_dim, seq_length * 10).cuda()
         self.attnBlocks = torch.nn.ModuleList([
-            ResidualAttnBlock(seq_length, energy_embed_dim, energy_num_heads, energy_num_hidden).cuda()
+            ResidualAttnBlock(seq_length * 10, energy_embed_dim, energy_num_heads, energy_num_hidden).cuda()
             for i in range(energy_num_attn)])
 
         self.realCoordEnc = DiagnosticPositionModule(3, 32, seq_length).cuda()
@@ -149,16 +151,8 @@ class ModularWithRNNBackbone(torch.nn.Module):
         B_x = x[:, 32 * 8:32 * 8 + 64]
         p_x = x[:, 32 * 8 + 64:32 * 8 + 64 + 51]
 
-        I_on = torch.reshape(x[:, -10], (-1, 1, 1))
-        V_on = torch.reshape(x[:, -9], (-1, 1, 1))
-        n_on = torch.reshape(x[:, -8], (-1, 1, 1))
-        d0_on = torch.reshape(x[:, -7], (-1, 1, 1))
-        d1_on = torch.reshape(x[:, -6], (-1, 1, 1))
-        d2_on = torch.reshape(x[:, -5], (-1, 1, 1))
-        d3_on = torch.reshape(x[:, -4], (-1, 1, 1))
-        d4_on = torch.reshape(x[:, -3], (-1, 1, 1))
-        B_on = torch.reshape(x[:, -2], (-1, 1, 1))
-        p_on = torch.reshape(x[:, -1], (-1, 1, 1))
+        key_mask = torch.reshape(x[:, -10:], (-1, 10, 1)).repeat((1, 1, self.seq_length))
+        key_mask = key_mask.reshape((-1, 10 * self.seq_length))
 
         batch_size = I_x.shape[0]
 
@@ -168,35 +162,25 @@ class ModularWithRNNBackbone(torch.nn.Module):
         d3_pos = self.realCoordEnc(torch.tensor([0.46, ]).to(device))
         d4_pos = self.realCoordEnc(torch.tensor([0.10, ]).to(device))
 
-        shared_memory = torch.zeros((batch_size, self.seq_length, self.embed_dim)).to(device)
-        for i in range(self.memory_iterations):
-            shared_memory = torch.cat([self.dishargeI(I_x, shared_memory) * I_on,
-                             self.dishargeV(V_x, shared_memory) * V_on,
-                             self.interferometer(n_x, shared_memory) * n_on,
-                             self.diodes(d0_x + d0_pos, shared_memory) * d0_on,
-                             self.diodes(d1_x + d1_pos, shared_memory) * d1_on,
-                             self.diodes(d2_x + d2_pos, shared_memory) * d2_on,
-                             self.diodes(d3_x + d3_pos, shared_memory) * d3_on,
-                             self.diode_HeII(d4_x + d4_pos, shared_memory) * d4_on,
-                             self.magnets(B_x, shared_memory) * B_on,
-                             self.RGA(p_x, shared_memory) * p_on], dim=0)
-
         # shared_memory = torch.zeros((batch_size, self.seq_length, self.embed_dim)).to(device)
         # for i in range(self.memory_iterations):
-        #     shared_memory = (self.dishargeI(I_x, shared_memory) * I_on +
-        #                       self.dishargeV(V_x, shared_memory) * V_on +
-        #                       self.interferometer(n_x, shared_memory) * n_on +
-        #                       self.diodes(d0_x + d0_pos, shared_memory) * d0_on +
-        #                       self.diodes(d1_x + d1_pos, shared_memory) * d1_on +
-        #                       self.diodes(d2_x + d2_pos, shared_memory) * d2_on +
-        #                       self.diodes(d3_x + d3_pos, shared_memory) * d3_on +
-        #                       self.diode_HeII(d4_x + d4_pos, shared_memory) * d4_on +
-        #                       self.magnets(B_x, shared_memory) * B_on +
-        #                       self.RGA(p_x, shared_memory) * p_on)
+        shared_memory = torch.cat([self.dishargeI(I_x),
+                                   self.dishargeV(V_x),
+                                   self.interferometer(n_x),
+                                   self.diodes(d0_x + d0_pos),
+                                   self.diodes(d1_x + d1_pos),
+                                   self.diodes(d2_x + d2_pos),
+                                   self.diodes(d3_x + d3_pos),
+                                   self.diode_HeII(d4_x + d4_pos),
+                                   self.magnets(B_x),
+                                   self.RGA(p_x)], dim=1)
 
         shared_memory = self.seqPosEnc(shared_memory)
         for i, block in enumerate(self.attnBlocks):
-            shared_memory = block(shared_memory)
+            if i == 0:
+                shared_memory = block(shared_memory, key_mask=key_mask)
+            else:
+                shared_memory = block(shared_memory)
 
         # shared_memory = self.memBlock1(shared_memory_temp)
         # shared_memory = self.memBlock2(shared_memory)
@@ -209,9 +193,9 @@ class ModularWithRNNBackbone(torch.nn.Module):
 
 # A comprehensive guide to distributed data parallel:
 # https://medium.com/codex/a-comprehensive-tutorial-to-pytorch-distributeddataparallel-1f4b42bb1b51
-def setup(rank, world_size):
+def setup(rank, world_size, port):
     os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '24163'
+    os.environ['MASTER_PORT'] = str(port)
     torch.distributed.init_process_group("nccl", rank=rank, world_size=world_size)
 
 
@@ -219,12 +203,13 @@ def cleanup():
     torch.distributed.destroy_process_group()
 
 
-def main(rank, world_size):
-    setup(rank, world_size)
-    sh_mem = sm.SharedMemory(name="exit_mem")
+def main(rank, world_size, hyperparams, port):
+    setup(rank, world_size, port)
+    sh_mem = sm.SharedMemory(name="exit_mem_{}".format(os.getppid()),)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     identifier = datetime.datetime.now().strftime('%Y-%m-%d_%Hh-%Mm-%Ss')
+    hyperparams['identifier'] = identifier
     project_name = "modular_ebm"
     exp_path = "experiments_modular/"
     path = exp_path + identifier
@@ -236,30 +221,36 @@ def main(rank, world_size):
         shutil.copy(project_name + "_sampling.py", path + "/" + project_name + "_sampling.py")
         shutil.copy(project_name + "_diagnostics.py", path + "/" + project_name + "_diagnostics.py")
 
-    hyperparams = {
-        "num_epochs": 1,
-        "reg_amount": 1e0,
-        "replay_frac": 0.99,
-        "replay_size": 8192,
+        with open(path + "/" + "hyperparams.json", 'w') as json_f:
+            json.dump(hyperparams, json_f)
 
-        "sample_steps": 50,
-        "step_size": 1e2,
-        "noise_scale": 5e-3,
-        "augment_data": True,
 
-        "batch_size_max": 32,
-        "lr": 1e-5,
+    # hyperparams = {
+    #     "num_epochs": 10,
+    #     "reg_amount": 1e0,
+    #     "replay_frac": 0.99,
+    #     "replay_size": 8192,
 
-        "kl_weight_energy": 1e0,
-        "kl_weight_entropy": 1e0,
-        "kl_backprop_steps": 1,
+    #     "sample_steps": 50,
+    #     "step_size": 1e2,
+    #     "noise_scale": 5e-3,
+    #     "augment_data": True,
 
-        "weight_decay": 1e-1,
-        "identifier": identifier,
-        "resume": False,
-        # "resume_path": "2022-05-11_23h-18m-46s",
-        # "resume_version": "checkpoints/model-0-3810"
-    }
+    #     "batch_size_max": 42,
+    #     "lr": 1.5e-5,
+
+    #     "kl_weight_energy": 1e0,
+    #     "kl_weight_entropy": 1e0,
+    #     "kl_backprop_steps": 1,
+
+    #     "weight_decay": 1e-1,
+    #     "identifier": identifier,
+    #     "resume": False,
+    #     # "resume_path": "2022-08-22_22h-29m-07s",
+    #     # "resume_version": "checkpoints/model-0-7672"
+
+    #     'dataset': "data-MSI-mini_2022-9-28_sets-1-train.npz"
+    # }
 
     num_epochs = hyperparams["num_epochs"]
     reg_amount = hyperparams["reg_amount"]
@@ -280,17 +271,19 @@ def main(rank, world_size):
         resume_version = hyperparams["resume_version"]
 
     writer = SummaryWriter(log_dir=path)
-    model = ModularWithRNNBackbone()
+    model = ModularWithRNNBackbone(hyperparams)
     if resume:
+        with open(resume_path + "/" + "hyperparams.json") as json_f:
+            hyperparams_temp = json.loads(json_f.read())
         spec = importlib.util.spec_from_file_location(project_name + "_copy", exp_path +
                                                       resume_path + "/" + project_name + "_copy.py")
         ebm = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(ebm)
-        model = ebm.ModularWithRNNBackbone()
+        model = ebm.ModularWithRNNBackbone(hyperparams_temp)
 
     if rank == 0:
         print("Loading data: " + path, flush=True)
-    data_path = "data/data-MSI-all_2022-5-22_17-6-24-train.npz"
+    data_path = "data/" + hyperparams["dataset"]
     data = load_data(data_path)
     num_examples = data.shape[0]
     data_size = data.shape[1]
@@ -322,7 +315,7 @@ def main(rank, world_size):
         ckpt = torch.load(exp_path + resume_path + "/" + resume_version + ".pt", map_location=map_location)
         model.load_state_dict(ckpt['model_state_dict'], strict=True)
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-        # replay_buffer.sample_list = ckpt['replay_buffer_list']
+        replay_buffer.sample_list = ckpt['replay_buffer_list']
 
     num_batches = len(dataloader)
 
@@ -495,7 +488,7 @@ def main(rank, world_size):
             # Longer-term metrics
             if rank == 0:
                 # End training after fixed amount of time
-                if time.time() - t_start_autoclose > 3600 * 7:
+                if time.time() - t_start_autoclose > 3600 * hyperparams['time_limit']:
                     sh_mem.buf[0] = 1
 
                 # scalars
@@ -582,11 +575,97 @@ def main(rank, world_size):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train the modular EBM")
+    parser.add_argument('--num_epochs', type=int)
+    parser.add_argument('--reg_amount', type=float)
+    parser.add_argument('--replay_frac', type=float)
+    parser.add_argument('--replay_size', type=int)
+
+    parser.add_argument('--sample_steps', type=int)
+    parser.add_argument('--step_size', type=int)
+    parser.add_argument('--noise_scale', type=float)
+    parser.add_argument('--augment_data', type=bool)
+
+    parser.add_argument('--batch_size_max', type=int)
+    parser.add_argument('--lr', type=float)
+
+    parser.add_argument('--kl_weight_energy', type=float)
+    parser.add_argument('--kl_weight_entropy', type=float)
+    parser.add_argument('--kl_backprop_steps', type=int)
+
+    parser.add_argument('--weight_decay', type=float)
+    # parser.add_argument('--identifier')
+
+    parser.add_argument('--resume', type=bool)
+    parser.add_argument('--resume_path', type=str)
+    parser.add_argument('--resume_version', type=str)
+
+    parser.add_argument('--dataset', type=str)
+
+    # parser.add_argument('--seq_length', type=int)
+    parser.add_argument('--embed_dim', type=int)
+    parser.add_argument('--dense_width', type=int)
+    parser.add_argument('--num_heads', type=int)
+    parser.add_argument('--num_hidden', type=int)
+    parser.add_argument('--num_msi_attn', type=int)
+    parser.add_argument('--energy_num_heads', type=int)
+    parser.add_argument('--energy_num_hidden', type=int)
+    parser.add_argument('--energy_num_attn', type=int)
+
+    parser.add_argument('--time_limit', type=float, default=-1,
+                        help='Time limit (in hours). -1 for unlimited')
+    parser.add_argument('--port', type=int, default=26000)
+    args = parser.parse_args()
+
+    hyperparams = {
+        "num_epochs": 10,
+        "reg_amount": 1e0,
+        "replay_frac": 0.99,
+        "replay_size": 8192,
+
+        "sample_steps": 50,
+        "step_size": 1e2,
+        "noise_scale": 5e-3,
+        "augment_data": True,
+
+        "batch_size_max": 42,
+        "lr": 1e-5,
+
+        "kl_weight_energy": 1e0,
+        "kl_weight_entropy": 1e0,
+        "kl_backprop_steps": 1,
+
+        "weight_decay": 1e-1,
+        # "identifier": identifier,
+        "resume": False,
+        "resume_path": None,
+        "resume_version": None,
+        'time_limit': -1,
+
+        'dataset': "data-MSI-mini_2022-9-28_sets-1-train.npz",
+
+        # Model settings
+        'seq_length': 32,
+        'embed_dim': 512,
+        'dense_width': 512,
+        'num_heads': 16,
+        'num_hidden': 512,
+        'num_msi_attn': 1,
+        'energy_num_heads': 16,
+        'energy_num_hidden': 512,
+        'energy_num_attn': 2,
+    }
+
+    for key in vars(args).keys():
+        if vars(args)[key] is not None and key != 'port':
+            hyperparams[key] = vars(args)[key]
+
     world_size = 1
-    sh_mem = sm.SharedMemory(name="exit_mem", create=True, size=1)
+    sh_mem = sm.SharedMemory(name="exit_mem_{}".format(os.getpid()), create=True, size=1)
     sh_mem.buf[0] = 0
     try:
-        proc_context = torch.multiprocessing.spawn(main, args=(world_size,), nprocs=world_size, join=False)
+        proc_context = torch.multiprocessing.spawn(main, args=(world_size, hyperparams, args.port),
+                                                   nprocs=world_size, join=False)
         proc_context.join()
     except KeyboardInterrupt:
         sh_mem.buf[0] = 1

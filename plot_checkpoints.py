@@ -9,6 +9,8 @@ from tqdm import tqdm
 import re
 from collections import OrderedDict
 import sys
+import json
+import glob
 
 # os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
@@ -56,7 +58,7 @@ class ConditionalFunc(torch.nn.Module):
     def __init__(self):
         super(ConditionalFunc, self).__init__()
 
-    def forward(self, x): 
+    def forward(self, x):
         # Average over discharge currents
         E_modified = (x[:, 133:183].mean(dim=1) - ((1100 - torch.tensor(mean[0], device=device, requires_grad=True)) / 
                                                    torch.tensor(ptp[0], device=device, requires_grad=True)))
@@ -245,10 +247,11 @@ def conditionally_sample(init_data, n_samp, steps, step_size, noise, samp_begin,
 
 if __name__ == '__main__':
     device = torch.device('cuda:0')
+    # device = torch.device('cpu')
 
     sys.path.remove('/home/phil/Desktop/EBMs/lapd-ebm')  # Remove this script directory path
 
-    experiments_dir = "/home/phil/Desktop/EBMs/lapd-ebm/experiments_modular"
+    # experiments_dir = "/home/phil/Desktop/EBMs/lapd-ebm/experiments_modular"
     # filepaths = []
     # for dirpath, dirs, files in os.walk(experiments_dir):
     #     for f in files:
@@ -257,13 +260,27 @@ if __name__ == '__main__':
     # filepaths = sorted(filepaths)
 
     # filepaths = filepaths[133:]
-    filepaths = [
-                 '2022-08-19_01h-51m-13s/checkpoints/model-0-3032.pt',
-                 '2022-08-19_01h-51m-13s/checkpoints/model-0-2024.pt',
-                 '2022-08-19_01h-51m-13s/checkpoints/model-0-1016.pt',
-                 # '2022-08-19_01h-51m-13s/checkpoints/model-0-510.pt',
-                 # '2022-08-19_01h-51m-13s/checkpoints/model-0-3.pt'
-                 ]
+    # filepaths = [
+    #              '2022-09-29_19h-42m-21s/checkpoints/model-0-2566.pt',
+    #              '2022-09-29_19h-43m-50s/checkpoints/model-0-1565.pt',
+    #              '2022-09-29_19h-45m-53s/checkpoints/model-0-4063.pt',
+    #             ]
+
+    experiments_dir = "/home/phil/Desktop/EBMs/lapd-ebm/experiments_modular"
+    filepaths = []
+    # filepaths.extend(glob.glob('experiments_modular/2022-09-29_19h-42m-21s/checkpoints/*.pt'))
+    filepaths.extend(glob.glob('experiments_modular/2022-09-29_19h-43m-50s/checkpoints/*.pt'))
+    filepaths.extend(glob.glob('experiments_modular/2022-09-29_19h-45m-53s/checkpoints/*.pt'))
+    filepaths.extend(glob.glob('experiments_modular/2022-09-29_23h-42m-39s/checkpoints/*.pt'))
+    filepaths.extend(glob.glob('experiments_modular/2022-09-29_23h-44m-08s/checkpoints/*.pt'))
+    filepaths.extend(glob.glob('experiments_modular/2022-09-29_23h-46m-10s/checkpoints/*.pt'))
+    filepaths.extend(glob.glob('experiments_modular/2022-09-30_03h-42m-58s/checkpoints/*.pt'))
+    filepaths.extend(glob.glob('experiments_modular/2022-09-30_03h-44m-28s/checkpoints/*.pt'))
+    filepaths.extend(glob.glob('experiments_modular/2022-09-30_03h-46m-27s/checkpoints/*.pt'))
+    filepaths.extend(glob.glob('experiments_modular/2022-09-30_07h-43m-15s/checkpoints/*.pt'))
+    filepaths.extend(glob.glob('experiments_modular/2022-09-30_07h-44m-49s/checkpoints/*.pt'))
+    filepaths.extend(glob.glob('experiments_modular/2022-09-30_07h-46m-44s/checkpoints/*.pt'))
+    filepaths = [f.replace('experiments_modular/', '') for f in filepaths]
 
     for f in filepaths:
         try:
@@ -273,16 +290,13 @@ if __name__ == '__main__':
             rundir = experiments_dir + "/" + identifier
             model_num = match.group(2)
 
-            with open(rundir + "/" + "modular_ebm_copy.py", 'r') as infile:
-                for line in infile:
-                    if "data_path = " in line:
-                        data_filename = (line[17:-6])
-                    if "\"step_size\": " in line:
-                        step_size = float(line[21:-2])
-                    if "\"sample_steps\": " in line:
-                        sample_steps = int(line[24:-2])
-                    if "\"noise_scale\": " in line:
-                        noise_scale = float(line[23:-2])
+            with open(rundir + "/" + "hyperparams.json") as json_f:
+                hyperparams = json.loads(json_f.read())
+
+            dataset = "data/" + hyperparams["dataset"]
+            step_size = hyperparams["step_size"]
+            sample_steps = hyperparams["sample_steps"]
+            noise = hyperparams["noise_scale"]
 
         # ------------------------------------------ #
         # Everything below this goes in the for loop
@@ -306,7 +320,7 @@ if __name__ == '__main__':
                 def perturb_samples(x):
                     return x
 
-            model = ebm.ModularWithRNNBackbone().to(device)
+            model = ebm.ModularWithRNNBackbone(hyperparams).to(device)
             ckpt = torch.load("experiments_modular/" + f)
 
             model_dict = OrderedDict()
@@ -322,18 +336,21 @@ if __name__ == '__main__':
             # ------ Load data ------ #
 
             # data_all = np.load(data_filename + ".npz")['signals']
-            if 'train' in data_filename:
-                data_filename = data_filename[:-6]
-            data_valid = ebm.load_data(data_filename + "-valid.npz")
 
-            data_path = data_filename + "-valid.npz"
-            data = ebm.load_data(data_path)
+            # if 'train' in dataset:  # edited for data mode size eval
+            # Try loading validation dataset
+            data = ebm.load_data(dataset)
+            try:
+                data_valid = ebm.load_data(dataset[:-6] + "-valid.npz")
+            except:
+                data_valid = data
+
             mean = np.zeros((10))
-            ptp = np.load(data_path)['scale']
+            ptp = np.load(dataset)['scale']
             datasize = data.shape[1]
 
             n_samp_total = 128
-            n_samp_divis = 2
+            n_samp_divis = 1
             n_samp = n_samp_total // n_samp_divis
 
             data_valid_idx = 50123
@@ -358,8 +375,7 @@ if __name__ == '__main__':
 
             steps = sample_steps * 2
             step_size = step_size
-            noise = noise_scale
-            # noise = 0
+            noise = noise
 
             # data_valid_idx = 15000
             data_valid_idx = 50123
