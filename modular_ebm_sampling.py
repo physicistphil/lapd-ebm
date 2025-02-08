@@ -49,12 +49,25 @@ def sample_langevin_cuda(x, model, sample_steps=10, step_size=10, noise_scale=0.
 def sample_langevin_KL_cuda(x, model, sample_steps=10, kl_backprop_steps=5, step_size=10, noise_scale=0.005):
     gradient_enabled_mask = torch.cat([torch.ones((1, x.shape[1] - 10), device=x.get_device()),
                                        torch.zeros((1, 10), device=x.get_device())], dim=1)
+    avg_grad_mag = 0
+    avg_noise_mag = 0
     for i in range(sample_steps):
         x.requires_grad_(True)  # So gradients are saved
-        noise = torch.randn_like(x) * noise_scale
-        model_output = model(x + noise)
+
+        # Noise / implementation in the style of Du 2019
+        # noise = torch.randn_like(x) * noise_scale
+        # model_output = model(x + noise)
+        # Noise / implementation in the style of Nijkamp 2020
+        noise = torch.randn_like(x) * step_size
+        model_output = model(x)
         # Only inputs so that only grad wrt x is calculated (and not all remaining vars)
-        gradient = torch.autograd.grad(model_output.sum(), x, only_inputs=True)[0]
+        gradient = torch.autograd.grad(model_output.sum(), x, only_inputs=True)[0] * gradient_enabled_mask
+
+        # For diagnostics purposes
+        # Calculate average (over samples) gradient magnitude
+        avg_grad_mag += torch.sqrt(torch.mean((gradient * (step_size ** 2) / 2).square(), dim=1)).mean().detach()
+        # Similar calculation, should be equal to step_size on average
+        avg_noise_mag += torch.sqrt(torch.mean(noise.square(), dim=1)).mean().detach()
 
         # Backpropping through 5 steps
         # kl_backprop_steps = 5
@@ -65,11 +78,20 @@ def sample_langevin_KL_cuda(x, model, sample_steps=10, kl_backprop_steps=5, step
             kl_model_output = model(x_KL + noise)
             kl_gradient = torch.autograd.grad(kl_model_output.sum(), x_KL,
                                               only_inputs=True, create_graph=True)[0]
-            x_KL = x_KL - kl_gradient * step_size * gradient_enabled_mask
-        x = x - gradient * step_size * gradient_enabled_mask
+            # Noise / implementation in the style of Du 2019
+            # x_KL = x_KL - kl_gradient * step_size * gradient_enabled_mask
+            # Noise / implementation in the style of Nijkamp 2020
+            x_KL = x_KL - (kl_gradient * (step_size ** 2) / 2 - noise) * gradient_enabled_mask
+        # Noise / implementation in the style of Du 2019
+        # x = x - gradient * step_size * gradient_enabled_mask
+        # Noise / implementation in the style of Nijkamp 2020
+        x = x - (gradient * (step_size ** 2) / 2 - noise * gradient_enabled_mask)
         x = x.detach()  # Remove the gradients
 
-    return x, x_KL
+    avg_grad_mag = avg_grad_mag / (sample_steps + 1)
+    avg_noise_mag = avg_noise_mag / (sample_steps + 1)
+
+    return x, x_KL, avg_grad_mag, avg_noise_mag
 
 
 def perturb_samples(samples):

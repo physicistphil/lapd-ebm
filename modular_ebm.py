@@ -20,8 +20,8 @@ from modular_ebm_diagnostics import *
 from modular_ebm_sampling import *
 
 # Pretty tracebacks
-import rich.traceback
-rich.traceback.install()
+# import rich.traceback
+# rich.traceback.install()
 
 import sys
 import signal
@@ -56,19 +56,19 @@ def load_data(path):
                            np.nan_to_num(data_signals['pressures'], nan=-0.9)), axis=1)
     del data_signals
 
-    enabled_mask = np.ones((data.shape[0], 10), dtype=bool)
-    enabled_mask[datafile['discharge_current_cut'].astype('i4'), 0] = False
-    enabled_mask[datafile['discharge_voltage_cut'].astype('i4'), 1] = False
-    enabled_mask[datafile['interferometer_cut'].astype('i4'), 2] = False
-    enabled_mask[datafile['diode_0_cut'].astype('i4'), 3] = False
-    enabled_mask[datafile['diode_1_cut'].astype('i4'), 4] = False
-    enabled_mask[datafile['diode_2_cut'].astype('i4'), 5] = False
-    enabled_mask[datafile['diode_3_cut'].astype('i4'), 6] = False
-    enabled_mask[datafile['diode_4_cut'].astype('i4'), 7] = False
-    enabled_mask[datafile['magnet_profile_cut'].astype('i4'), 8] = False
-    enabled_mask[datafile['pressures_cut'].astype('i4'), 9] = False
-    data = np.concatenate((data, enabled_mask), axis=1)
-    del enabled_mask
+    disabled_mask = np.zeros((data.shape[0], 10), dtype=bool)
+    disabled_mask[datafile['discharge_current_cut'].astype('i4'), 0] = True
+    disabled_mask[datafile['discharge_voltage_cut'].astype('i4'), 1] = True
+    disabled_mask[datafile['interferometer_cut'].astype('i4'), 2] = True
+    disabled_mask[datafile['diode_0_cut'].astype('i4'), 3] = True
+    disabled_mask[datafile['diode_1_cut'].astype('i4'), 4] = True
+    disabled_mask[datafile['diode_2_cut'].astype('i4'), 5] = True
+    disabled_mask[datafile['diode_3_cut'].astype('i4'), 6] = True
+    disabled_mask[datafile['diode_4_cut'].astype('i4'), 7] = True
+    disabled_mask[datafile['magnet_profile_cut'].astype('i4'), 8] = True
+    disabled_mask[datafile['pressures_cut'].astype('i4'), 9] = True
+    data = np.concatenate((data, disabled_mask), axis=1)
+    del disabled_mask
 
     data = torch.tensor(data, dtype=torch.float)
 
@@ -80,115 +80,190 @@ class ModularWithRNNBackbone(torch.nn.Module):
         super(ModularWithRNNBackbone, self).__init__()
 
         # Set model sizes
-        self.seq_length = seq_length = hyperparams["seq_length"]
-        self.embed_dim = embed_dim = hyperparams["embed_dim"]
-        self.dense_width = dense_width = hyperparams["dense_width"]
+        # self.seq_length = seq_length = hyperparams["seq_length"]
+        # self.embed_dim = out_channels = embed_dim = hyperparams["embed_dim"]
+        # self.dense_width = dense_width = hyperparams["dense_width"]
 
-        num_heads = hyperparams["num_heads"]
-        num_hidden = hyperparams["num_hidden"]
-        num_msi_attn = hyperparams["num_msi_attn"]
-        # num_mem_attn = 3
-        # num_sum_attn = 3
-        energy_embed_dim = self.embed_dim
-        energy_num_heads = hyperparams["energy_num_heads"]
-        energy_num_hidden = hyperparams["energy_num_hidden"]
-        energy_num_attn = hyperparams["energy_num_attn"]
+        # num_heads = hyperparams["num_heads"]
+        # num_hidden = hyperparams["num_hidden"]
+        # self.num_msi_attn = num_msi_attn = hyperparams["num_msi_attn"]
+        # # num_mem_attn = 3
+        # # num_sum_attn = 3
+        # energy_embed_dim = self.embed_dim
+        # energy_num_heads = hyperparams["energy_num_heads"]
+        # energy_num_hidden = hyperparams["energy_num_hidden"]
+        # energy_num_attn = hyperparams["energy_num_attn"]
 
-        # self.memory_iterations = 1
+        # # self.realCoordEnc = DiagnosticPositionModule(3, 32, seq_length).cuda()
 
-        # seq_length, num_msi_attn, num_mem_attn, num_sum_attn
-        self.dishargeI = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-                                             num_msi_attn).cuda()
-        self.dishargeV = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-                                             num_msi_attn).cuda()
-        self.interferometer = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-                                                  num_msi_attn).cuda()
-        self.diodes = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-                                          num_msi_attn).cuda()
-        self.diode_HeII = MSITimeSeriesModule(seq_length, embed_dim, num_heads, num_hidden,
-                                              num_msi_attn).cuda()
-        self.magnets = MagneticFieldModule(dense_width, seq_length, embed_dim, num_heads, num_hidden,
-                                           num_msi_attn).cuda()
-        self.RGA = RGAPressureModule(dense_width, seq_length, embed_dim, num_heads, num_hidden,
-                                     num_msi_attn).cuda()
+        # # kernel_size = 4
+        # # self.dishargeI = MSICNNModule(seq_length, embed_dim, kernel_size)
+        # # self.dishargeV = MSICNNModule(seq_length, embed_dim, kernel_size)
+        # # self.interferometer = MSICNNModule(seq_length, embed_dim, kernel_size)
+        # # self.diode0 = MSICNNModule(seq_length, embed_dim, kernel_size)
+        # # self.diode1 = MSICNNModule(seq_length, embed_dim, kernel_size)
+        # # self.diode2 = MSICNNModule(seq_length, embed_dim, kernel_size)
+        # # self.diode3 = MSICNNModule(seq_length, embed_dim, kernel_size)
+        # # self.diode_HeII = MSICNNModule(seq_length, embed_dim, kernel_size)
+        # # self.magnets = MagneticCNNModule(seq_length, embed_dim, kernel_size)
+        # # self.RGA = RGADenseModule(seq_length, 64, embed_dim, kernel_size)
 
-        self.seqPosEnc = SequencePositionalEncoding(energy_embed_dim, seq_length * 10).cuda()
-        self.attnBlocks = torch.nn.ModuleList([
-            ResidualAttnBlock(seq_length * 10, energy_embed_dim, energy_num_heads, energy_num_hidden).cuda()
-            for i in range(energy_num_attn)])
+        # # self.seqPosEnc = SequencePositionalEncoding(embed_dim * 10 + 8, seq_length).cuda()
 
-        self.realCoordEnc = DiagnosticPositionModule(3, 32, seq_length).cuda()
+        # # self.combiner = CombinedDiagnosticsCNN(seq_length, embed_dim, kernel_size)
 
+        #  # seq_length, num_msi_attn, num_mem_attn, num_sum_attn
+
+        # # Build embedding for each diagnostic
         # kernel_size = 4
-        # self.dishargeI = MSICNNModule(seq_length, embed_dim, kernel_size)
-        # self.dishargeV = MSICNNModule(seq_length, embed_dim, kernel_size)
-        # self.interferometer = MSICNNModule(seq_length, embed_dim, kernel_size)
-        # self.diodes = MSICNNModule(seq_length, embed_dim, kernel_size)
-        # self.diode1 = MSICNNModule(seq_length, embed_dim, kernel_size)
-        # self.diode2 = MSICNNModule(seq_length, embed_dim, kernel_size)
-        # self.diode3 = MSICNNModule(seq_length, embed_dim, kernel_size)
-        # self.diode_HeII = MSICNNModule(seq_length, embed_dim, kernel_size)
-        # self.magnets = RGADenseModule(seq_length, 64, embed_dim, kernel_size)
-        # self.RGA = RGADenseModule(seq_length, 64, embed_dim, kernel_size)
+        # self.dishargeI_embed = CNNDenseNetBlock(seq_length, embed_dim, kernel_size)
+        # self.dishargeV_embed = CNNDenseNetBlock(seq_length, embed_dim, kernel_size)
+        # self.interferometer_embed = CNNDenseNetBlock(seq_length, embed_dim, kernel_size)
+        # self.diode0_embed = CNNDenseNetBlock(seq_length, embed_dim, kernel_size)
+        # self.diode1_embed = CNNDenseNetBlock(seq_length, embed_dim, kernel_size)
+        # self.diode2_embed = CNNDenseNetBlock(seq_length, embed_dim, kernel_size)
+        # self.diode3_embed = CNNDenseNetBlock(seq_length, embed_dim, kernel_size)
+        # self.diode_HeII_embed = CNNDenseNetBlock(seq_length, embed_dim, kernel_size)
+        # self.magnets_embed = MagneticCNNModule(seq_length, embed_dim, kernel_size)
+        # self.RGA_embed = RGADenseModule(seq_length, 64, seq_length * embed_dim, kernel_size)
 
-        # self.memBlock1 = CNNResidualBlock(seq_length, embed_dim, kernel_size)
-        # self.memBlock2 = CNNResidualBlock(seq_length, embed_dim, kernel_size)
+        # self.dishargeI = torch.nn.ModuleList([
+        #     ResidualAttnBlock(seq_length, out_channels, num_heads, num_hidden)
+        #     for i in range(num_msi_attn)])
+        # self.dishargeV = torch.nn.ModuleList([
+        #     ResidualAttnBlock(seq_length, out_channels, num_heads, num_hidden)
+        #     for i in range(num_msi_attn)])
+        # self.interferometer = torch.nn.ModuleList([
+        #     ResidualAttnBlock(seq_length, out_channels, num_heads, num_hidden)
+        #     for i in range(num_msi_attn)])
+        # self.diode0 = torch.nn.ModuleList([
+        #     ResidualAttnBlock(seq_length, out_channels, num_heads, num_hidden)
+        #     for i in range(num_msi_attn)])
+        # self.diode1 = torch.nn.ModuleList([
+        #     ResidualAttnBlock(seq_length, out_channels, num_heads, num_hidden)
+        #     for i in range(num_msi_attn)])
+        # self.diode2 = torch.nn.ModuleList([
+        #     ResidualAttnBlock(seq_length, out_channels, num_heads, num_hidden)
+        #     for i in range(num_msi_attn)])
+        # self.diode3 = torch.nn.ModuleList([
+        #     ResidualAttnBlock(seq_length, out_channels, num_heads, num_hidden)
+        #     for i in range(num_msi_attn)])
+        # self.diode_HeII = torch.nn.ModuleList([
+        #     ResidualAttnBlock(seq_length, out_channels, num_heads, num_hidden)
+        #     for i in range(num_msi_attn)])
+        # self.magnets = torch.nn.ModuleList([
+        #     ResidualAttnBlock(seq_length, out_channels, num_heads, num_hidden)
+        #     for i in range(num_msi_attn)])
+        # self.RGA = torch.nn.ModuleList([
+        #     ResidualAttnBlock(seq_length, out_channels, num_heads, num_hidden)
+        #     for i in range(num_msi_attn)])
 
-        self.softmax = torch.nn.Softmax(dim=1)  # softmax over the seq_length
+        # self.seqPosEnc = SequencePositionalEncoding(energy_embed_dim, seq_length * 10).cuda()
+        # self.attnBlocks = torch.nn.ModuleList([
+        #     ResidualAttnBlock(seq_length * 10, energy_embed_dim, energy_num_heads, energy_num_hidden).cuda()
+        #     for i in range(energy_num_attn)])
+
+        # # self.realCoordEnc = DiagnosticPositionModule(3, 32, seq_length).cuda()
+
+        # self.softmax = torch.nn.Softmax(dim=2)  # dim=1: seq_length, dim=2: embedding
+        self.hidden = torch.nn.LazyLinear(1024)
+        self.relu = torch.nn.Tanh()
         self.linear = torch.nn.LazyLinear(1)
+
 
     def forward(self, x):
         device = getDeviceString(x.get_device())
 
-        I_x = x[:, 32 * 0:32 * 1]
-        V_x = x[:, 32 * 1:32 * 2]
-        n_x = x[:, 32 * 2:32 * 3]
-        d0_x = x[:, 32 * 3:32 * 4]
-        d1_x = x[:, 32 * 4:32 * 5]
-        d2_x = x[:, 32 * 5:32 * 6]
-        d3_x = x[:, 32 * 6:32 * 7]
-        d4_x = x[:, 32 * 7:32 * 8]
-        B_x = x[:, 32 * 8:32 * 8 + 64]
-        p_x = x[:, 32 * 8 + 64:32 * 8 + 64 + 51]
+        # I_x = x[:, 32 * 0:32 * 1]
+        # V_x = x[:, 32 * 1:32 * 2]
+        # n_x = x[:, 32 * 2:32 * 3]
+        # d0_x = x[:, 32 * 3:32 * 4]
+        # d1_x = x[:, 32 * 4:32 * 5]
+        # d2_x = x[:, 32 * 5:32 * 6]
+        # d3_x = x[:, 32 * 6:32 * 7]
+        # d4_x = x[:, 32 * 7:32 * 8]
+        # B_x = x[:, 32 * 8:32 * 8 + 64]
+        # p_x = x[:, 32 * 8 + 64:32 * 8 + 64 + 51]
 
-        key_mask = torch.reshape(x[:, -10:], (-1, 10, 1)).repeat((1, 1, self.seq_length))
-        key_mask = key_mask.reshape((-1, 10 * self.seq_length))
+        # key_mask = torch.reshape(x[:, -10:], (-1, 10, 1)).repeat((1, 1, self.seq_length))
+        # key_mask = key_mask.reshape((-1, 10 * self.seq_length))
 
-        batch_size = I_x.shape[0]
+        # batch_size = I_x.shape[0]
+        # # print(self.dishargeI_embed(torch.unsqueeze(I_x, 1)).transpose(1, 2).shape)
+        # # print(self.magnets_embed(B_x).shape)
+        # # print(self.magnets_embed(B_x).reshape(-1, self.seq_length, self.embed_dim).shape)
+        # # print(self.RGA_embed(p_x).unsqueeze(2).reshape(-1, self.seq_length, self.embed_dim).shape)
 
-        d0_pos = self.realCoordEnc(torch.tensor([0.12, ]).to(device))
-        d1_pos = self.realCoordEnc(torch.tensor([0.22, ]).to(device))
-        d2_pos = self.realCoordEnc(torch.tensor([0.34, ]).to(device))
-        d3_pos = self.realCoordEnc(torch.tensor([0.46, ]).to(device))
-        d4_pos = self.realCoordEnc(torch.tensor([0.10, ]).to(device))
+        # I_x = self.dishargeI_embed(torch.unsqueeze(I_x, 1)).transpose(1, 2)
+        # V_x = self.dishargeV_embed(torch.unsqueeze(V_x, 1)).transpose(1, 2)
+        # n_x = self.interferometer_embed(torch.unsqueeze(n_x, 1)).transpose(1, 2)
+        # d0_x = self.diode0_embed(torch.unsqueeze(d0_x, 1)).transpose(1, 2)
+        # d1_x = self.diode1_embed(torch.unsqueeze(d1_x, 1)).transpose(1, 2)
+        # d2_x = self.diode2_embed(torch.unsqueeze(d2_x, 1)).transpose(1, 2)
+        # d3_x = self.diode3_embed(torch.unsqueeze(d3_x, 1)).transpose(1, 2)
+        # d4_x = self.diode_HeII_embed(torch.unsqueeze(d4_x, 1)).transpose(1, 2)
+        # B_x = self.magnets_embed(B_x).reshape(-1, self.seq_length, self.embed_dim)
+        # p_x = self.RGA_embed(p_x).reshape(-1, self.seq_length, self.embed_dim)
 
-        # shared_memory = torch.zeros((batch_size, self.seq_length, self.embed_dim)).to(device)
-        # for i in range(self.memory_iterations):
-        shared_memory = torch.cat([self.dishargeI(I_x),
-                                   self.dishargeV(V_x),
-                                   self.interferometer(n_x),
-                                   self.diodes(d0_x + d0_pos),
-                                   self.diodes(d1_x + d1_pos),
-                                   self.diodes(d2_x + d2_pos),
-                                   self.diodes(d3_x + d3_pos),
-                                   self.diode_HeII(d4_x + d4_pos),
-                                   self.magnets(B_x),
-                                   self.RGA(p_x)], dim=1)
+        # # print(I_x.shape)
+        # # print(B_x.shape)
+        # # print(p_x.shape)
 
-        shared_memory = self.seqPosEnc(shared_memory)
-        for i, block in enumerate(self.attnBlocks):
-            if i == 0:
-                shared_memory = block(shared_memory, key_mask=key_mask)
-            else:
-                shared_memory = block(shared_memory)
+        # all_diagnostics = torch.cat([I_x,
+        #                              V_x,
+        #                              n_x,
+        #                              d0_x,
+        #                              d1_x,
+        #                              d2_x,
+        #                              d3_x,
+        #                              d4_x,
+        #                              B_x,
+        #                              p_x],
+        #                             dim=1)
+        # # print(all_diagnostics.shape)
 
-        # shared_memory = self.memBlock1(shared_memory_temp)
-        # shared_memory = self.memBlock2(shared_memory)
+        # for i in range(self.num_msi_attn):
+        #     I_x = self.dishargeI[i](I_x, x_full=all_diagnostics)
+        #     V_x = self.dishargeV[i](V_x, x_full=all_diagnostics)
+        #     n_x = self.interferometer[i](n_x, x_full=all_diagnostics)
+        #     d0_x = self.diode0[i](d0_x, x_full=all_diagnostics)
+        #     d1_x = self.diode1[i](d1_x, x_full=all_diagnostics)
+        #     d2_x = self.diode2[i](d2_x, x_full=all_diagnostics)
+        #     d3_x = self.diode3[i](d3_x, x_full=all_diagnostics)
+        #     d4_x = self.diode_HeII[i](d4_x, x_full=all_diagnostics)
+        #     B_x = self.magnets[i](B_x, x_full=all_diagnostics)
+        #     p_x = self.RGA[i](p_x, x_full=all_diagnostics)
 
-        shared_memory = self.softmax(shared_memory)
-        shared_memory = self.linear(shared_memory.reshape(batch_size, -1))
+        #     all_diagnostics = torch.cat([I_x,
+        #                                  V_x,
+        #                                  n_x,
+        #                                  d0_x,
+        #                                  d1_x,
+        #                                  d2_x,
+        #                                  d3_x,
+        #                                  d4_x,
+        #                                  B_x,
+        #                                  p_x],
+        #                                 dim=1)
 
-        return shared_memory
+        # # shape should be (batch size, out_channels * 10, seq_length)
+
+        # # So it knows where it is in the sequence
+        # # all_diagnostics = self.seqPosEnc(all_diagnostics.transpose(1, 2)).transpose(1, 2)
+        # all_diagnostics = self.seqPosEnc(all_diagnostics)
+        # # all_diagnostics = self.combiner(all_diagnostics)
+
+        # for i, block in enumerate(self.attnBlocks):
+        #     all_diagnostics = block(all_diagnostics)
+
+        # all_diagnostics = self.softmax(all_diagnostics)
+        batch_size = x.shape[0]
+        all_diagnostics = x[0:32 * 8 + 64 + 51]
+        all_diagnostics = self.hidden(all_diagnostics)
+        all_diagnostics = self.relu(all_diagnostics)
+        all_diagnostics = self.linear(all_diagnostics.reshape(batch_size, -1))
+
+        return all_diagnostics
 
 
 # A comprehensive guide to distributed data parallel:
@@ -224,44 +299,18 @@ def main(rank, world_size, hyperparams, port):
         with open(path + "/" + "hyperparams.json", 'w') as json_f:
             json.dump(hyperparams, json_f)
 
-
-    # hyperparams = {
-    #     "num_epochs": 10,
-    #     "reg_amount": 1e0,
-    #     "replay_frac": 0.99,
-    #     "replay_size": 8192,
-
-    #     "sample_steps": 50,
-    #     "step_size": 1e2,
-    #     "noise_scale": 5e-3,
-    #     "augment_data": True,
-
-    #     "batch_size_max": 42,
-    #     "lr": 1.5e-5,
-
-    #     "kl_weight_energy": 1e0,
-    #     "kl_weight_entropy": 1e0,
-    #     "kl_backprop_steps": 1,
-
-    #     "weight_decay": 1e-1,
-    #     "identifier": identifier,
-    #     "resume": False,
-    #     # "resume_path": "2022-08-22_22h-29m-07s",
-    #     # "resume_version": "checkpoints/model-0-7672"
-
-    #     'dataset': "data-MSI-mini_2022-9-28_sets-1-train.npz"
-    # }
-
     num_epochs = hyperparams["num_epochs"]
     reg_amount = hyperparams["reg_amount"]
     replay_frac = hyperparams["replay_frac"]
     replay_size = hyperparams["replay_size"]
+    replay_cyclic = hyperparams["replay_cyclic"]
     sample_steps = hyperparams["sample_steps"]
     step_size = hyperparams["step_size"]
     noise_scale = hyperparams["noise_scale"]
     augment_data = hyperparams["augment_data"]
     batch_size_max = hyperparams["batch_size_max"]
     lr = hyperparams["lr"]
+    momentum = hyperparams["momentum"]
     kl_weight_energy = hyperparams["kl_weight_energy"]
     kl_weight_entropy = hyperparams["kl_weight_entropy"]
     weight_decay = hyperparams["weight_decay"]
@@ -273,7 +322,7 @@ def main(rank, world_size, hyperparams, port):
     writer = SummaryWriter(log_dir=path)
     model = ModularWithRNNBackbone(hyperparams)
     if resume:
-        with open(resume_path + "/" + "hyperparams.json") as json_f:
+        with open(exp_path + resume_path + "/" + "hyperparams.json") as json_f:
             hyperparams_temp = json.loads(json_f.read())
         spec = importlib.util.spec_from_file_location(project_name + "_copy", exp_path +
                                                       resume_path + "/" + project_name + "_copy.py")
@@ -304,6 +353,9 @@ def main(rank, world_size, hyperparams, port):
                                              num_workers=4, pin_memory=True, sampler=sampler)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay,
                                   betas=(0.0, 0.999))
+    optimizer_SGD = torch.optim.SGD(model.parameters(), lr=lr, weight_decay=weight_decay,
+                                momentum=momentum, nesterov=False)
+    switch_opt_flag = True
     del data
 
     replay_buffer_init_data = torch.cat((torch.rand((replay_size, data_size - 10)) * 2 - 1,
@@ -315,16 +367,18 @@ def main(rank, world_size, hyperparams, port):
         ckpt = torch.load(exp_path + resume_path + "/" + resume_version + ".pt", map_location=map_location)
         model.load_state_dict(ckpt['model_state_dict'], strict=True)
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-        replay_buffer.sample_list = ckpt['replay_buffer_list']
+        ckpt_buffer_list = ckpt['replay_buffer_list']
+        replay_buffer.sample_list[0:len(ckpt_buffer_list)] = ckpt['replay_buffer_list']
 
     num_batches = len(dataloader)
 
     # Warmup schedule for the model
     def lr_func(x):
-        if x <= 60:
+        # return 1.0
+        if x <= 500:
             return 1.0
         else:
-            return 1 / torch.sqrt(torch.tensor(x - 60)).to(rank)
+            return 1 / torch.sqrt(torch.tensor(x - 500)).to(rank)
 
     lrScheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_func)
 
@@ -335,6 +389,9 @@ def main(rank, world_size, hyperparams, port):
         # summary(model, (data_size,), batch_size=batch_size_max)
         num_parameters = np.sum([p.numel() for p in model.parameters() if p.requires_grad])
         print("Parameters: {}".format(num_parameters))
+        for name, module in model.named_modules():
+            print(name, sum(param.numel() for param in module.parameters()))
+
         hyperparams['num_parameters'] = num_parameters
         wandb.init(project="modular-ebm", entity='phil',
                    group="", job_type="",
@@ -343,6 +400,7 @@ def main(rank, world_size, hyperparams, port):
     t_start0 = t_start1 = t_start2 = t_start_autoclose = time.time()
     pbar = tqdm(total=num_epochs)
     batch_iteration = 0
+    grad_mag_list = []
     if resume:
         batch_iteration = ckpt['batch_iteration']
     model.train(True)
@@ -371,38 +429,49 @@ def main(rank, world_size, hyperparams, port):
 
                 # print(pos_x[0, -11:])
 
-                neg_x = replay_buffer.sample(int(batch_size * replay_frac))
-                if augment_data:
-                    neg_x = perturb_samples(neg_x)
+                if replay_cyclic:
+                    with torch.no_grad():
+                        replay_buffer.sample_list[batch_iteration % replay_size] = torch.cat((torch.rand(pos_x.shape[1] - 10) * 4 - 2,
+                                                                  torch.ones(10)), dim=0).to(rank)
+                    if batch_size == batch_size_max:
+                        neg_x = replay_buffer.sample_list
+                    else:
+                        neg_x = replay_buffer.sample_list[batch_size_max - batch_size:batch_size_max] 
 
-                # print(neg_x[0, -11:])
+                else:
+                    # This needs to be fixed to account for the thrown away fraction when rounded
+                    neg_x = replay_buffer.sample(int(batch_size * replay_frac))
+                    if augment_data:
+                        neg_x = perturb_samples(neg_x)
 
-                # Refill part of the replay buffer with random data
-                neg_x_rand = torch.cat((torch.rand(batch_size - neg_x.shape[0], pos_x.shape[1] - 10) * 2 - 1,
-                                        torch.ones((batch_size - neg_x.shape[0], 10))), dim=1).to(rank)
-                neg_x = torch.cat([neg_x, neg_x_rand], 0)
-                # neg_x = torch.Tensor(neg_x).to(rank)
-                # neg_x = torch.Tensor(neg_x)
-                # neg_x.requires_grad = True  # Needed if not using Langevin_KL sampling
+                    # Refill part of the replay buffer with random data
+                    neg_x_rand = torch.cat((torch.rand(batch_size - neg_x.shape[0], pos_x.shape[1] - 10) * 2 - 1,
+                                            torch.ones((batch_size - neg_x.shape[0], 10))), dim=1).to(rank)
+                    neg_x = torch.cat([neg_x, neg_x_rand], 0)
+                    # neg_x = torch.Tensor(neg_x).to(rank)
+                    # neg_x = torch.Tensor(neg_x)
+                    # neg_x.requires_grad = True  # Needed if not using Langevin_KL sampling
 
-                # print(neg_x[-1, -11:])
-
+#                 print(neg_x.shape)
+                
                 # For calculating the KL loss later
                 num_kl_samples = 100
                 kl_samp = replay_buffer.sample(num_kl_samples)
 
-                # print(kl_samp[0, -11:])
-
                 # ------ PUT DIAGNOSTIC DROPOUT FOR SAMPLES HERE ------ #
 
                 # Run Langevin dynamics on sample
-                neg_x, kl_x = sample_langevin_KL_cuda(neg_x, model, sample_steps=sample_steps,
+                neg_x, kl_x, avg_grad_mag, avg_noise_mag = sample_langevin_KL_cuda(neg_x, model, sample_steps=sample_steps,
                                                       kl_backprop_steps=hyperparams["kl_backprop_steps"],
                                                       step_size=step_size, noise_scale=noise_scale)
-                replay_buffer.add(neg_x)  # neg_x already detached in Langevin call above
+                if replay_cyclic:
+                    with torch.no_grad():
+                        replay_buffer.sample_list[batch_size_max - batch_size:batch_size_max] = neg_x
+                else:
+                    replay_buffer.add(neg_x)  # neg_x already detached in Langevin call above
 
-                # print(neg_x[0, -11:])
-                # print(kl_x[0, -11:])
+                # avg_grad_mag = avg_grad_mag.cpu().numpy()
+                # avg_noise_mag = avg_noise_mag.cpu().numpy()
 
                 # KL loss -- energy part
                 # Don't accumulate grads in the model parameters for the KL loss
@@ -422,12 +491,15 @@ def main(rank, world_size, hyperparams, port):
 
                 # Backwards pass...
                 optimizer.zero_grad()
+
+                # pos_noise = torch.cat((torch.randn_like(pos_x[:, :-10]) * step_size, torch.zeros_like(pos_x[:, :10])), dim=1)
+                # pos_energy = model(pos_x + pos_noise * step_size)
                 pos_energy = model(pos_x)
                 neg_energy = model(neg_x.to(rank))
                 # neg_energy = model(neg_x)
                 energy_regularization = reg_amount * (pos_energy.square() + neg_energy.square()).mean()
 
-                loss = ((pos_energy - neg_energy).mean() + energy_regularization + kl_loss)
+                loss = ((pos_energy.mean() - neg_energy.mean()) + energy_regularization + kl_loss)
             # loss.backward()
             scaler.scale(loss).backward()
 
@@ -471,15 +543,18 @@ def main(rank, world_size, hyperparams, port):
                 kl_energy = kl_energy.mean()
                 if i % 20 == 0:
                     tqdm.write("#: {} // L: {:.2e} // (+): {:.2e} // (-): {:.2e} // "
-                               "(-)-(+): {:.2e}".format(i, loss, pos_energy,
+                               "(-)-(+): {:.2e} // |dU|: {:.2e} // |N|: {:.2e}".format(i, loss, pos_energy,
                                                         neg_energy,
-                                                        neg_energy - pos_energy))
+                                                        neg_energy - pos_energy,
+                                                        avg_grad_mag, avg_noise_mag))
                 wandb.log({"loss/total": loss,
                            "energy/reg": energy_regularization,
                            "energy/positive": pos_energy,
                            "energy/negative": neg_energy,
                            "energy/negative_relative": neg_energy - pos_energy,
                            "energy/kl_energy": kl_energy,
+                           "mcmc/avg_grad": avg_grad_mag,
+                           "mcmc/avg_noise": avg_noise_mag,
                            "loss/kl_loss": kl_loss,
                            "loss/max_likelihood": loss - kl_loss,
                            "batch_num": batch_iteration,
@@ -511,6 +586,8 @@ def main(rank, world_size, hyperparams, port):
                     writer.add_scalar("energy/negative", avg_energy_neg, batch_iteration)
                     writer.add_scalar("energy/negative_relative", avg_energy_neg - avg_energy_pos, batch_iteration)
                     writer.add_scalar("energy/kl_energy", avg_energy_kl, batch_iteration)
+                    writer.add_scalar("mcmc/avg_grad", avg_grad_mag)
+                    writer.add_scalar("mcmc/avg_noise", avg_noise_mag)
                     writer.add_scalar("loss/kl_loss", kl_loss_avg, batch_iteration)
                     writer.add_scalar("loss/max_likelihood", loss_avg - kl_loss_avg, batch_iteration)
                 # wandb.log({"loss/total": loss_avg,
@@ -544,21 +621,28 @@ def main(rank, world_size, hyperparams, port):
                                                         avg_energy_neg,
                                                         avg_energy_neg - avg_energy_pos))
 
+                # EVERY FIVE MIN
                 # Save checkpoint every hour
                 if ((epoch == 0 and i == 3) or (epoch == num_epochs - 1 and i == num_batches - 1)
-                    or time.time() - t_start2 > 3600 or sh_mem.buf[0] == 1):
+                    or time.time() - t_start2 > 300 or sh_mem.buf[0] == 1):
                     t_start2 = time.time()
                     torch.save({'epoch': epoch,
                                 'batch_iteration': batch_iteration,
                                 'model_state_dict': model.state_dict(),
                                 'optimizer_state_dict': optimizer.state_dict(),
                                 'lrScheduler_state_dict': lrScheduler.state_dict(),
-                                'replay_buffer_list': replay_buffer.sample(128)
+                                'replay_buffer_list': replay_buffer.sample(batch_size_max)
                                 },
                                path + "/checkpoints/model-{}-{}.pt".format(epoch, i))
 
             batch_iteration += 1
             batch_pbar.update(1)
+            
+#             grad_mag_list.append(avg_grad_mag)
+#             if batch_iteration > 40 and switch_opt_flag:
+#                 if torch.tensor(grad_mag_list[-10:]).mean() > 0.9 * noise_scale:
+#                     optimizer = optimizer_SGD
+#                     switch_opt_flag = False
 
             if sh_mem.buf[0] == 1:
                 print("\n ---- Exiting process ----\n")
@@ -580,14 +664,16 @@ if __name__ == "__main__":
     parser.add_argument('--reg_amount', type=float)
     parser.add_argument('--replay_frac', type=float)
     parser.add_argument('--replay_size', type=int)
+    parser.add_argument('--replay_cyclic', type=bool)
 
     parser.add_argument('--sample_steps', type=int)
-    parser.add_argument('--step_size', type=int)
+    parser.add_argument('--step_size', type=float)
     parser.add_argument('--noise_scale', type=float)
     parser.add_argument('--augment_data', type=bool)
 
     parser.add_argument('--batch_size_max', type=int)
     parser.add_argument('--lr', type=float)
+    parser.add_argument('--momentum', type=float)
 
     parser.add_argument('--kl_weight_energy', type=float)
     parser.add_argument('--kl_weight_entropy', type=float)
@@ -622,14 +708,16 @@ if __name__ == "__main__":
         "reg_amount": 1e0,
         "replay_frac": 0.99,
         "replay_size": 8192,
+        "replay_cyclic": False,
 
         "sample_steps": 50,
         "step_size": 1e2,
         "noise_scale": 5e-3,
         "augment_data": True,
 
-        "batch_size_max": 42,
+        "batch_size_max": 32,
         "lr": 1e-5,
+        "momentum": 0,
 
         "kl_weight_energy": 1e0,
         "kl_weight_entropy": 1e0,
@@ -646,13 +734,13 @@ if __name__ == "__main__":
 
         # Model settings
         'seq_length': 32,
-        'embed_dim': 512,
-        'dense_width': 512,
-        'num_heads': 16,
-        'num_hidden': 512,
-        'num_msi_attn': 1,
-        'energy_num_heads': 16,
-        'energy_num_hidden': 512,
+        'embed_dim': 256,
+        'dense_width': 128,
+        'num_heads': 8,
+        'num_hidden': 128,
+        'num_msi_attn': 2,
+        'energy_num_heads': 8,
+        'energy_num_hidden': 256,
         'energy_num_attn': 2,
     }
 

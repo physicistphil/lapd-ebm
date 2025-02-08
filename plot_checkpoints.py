@@ -11,6 +11,7 @@ from collections import OrderedDict
 import sys
 import json
 import glob
+import argparse
 
 # os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
@@ -78,26 +79,46 @@ def conditional_sampler(x):
     return E_model + E_conditional
 
 
-def sample_langevin_cuda_tqdm(x, model, sample_steps=10, step_size=10, noise_scale=0.005, conditional_mask=None):
+def sample_langevin_cuda_tqdm(x, model, sample_steps=10, step_size=10, noise_scale=0.005,
+                              conditional_mask=None, return_energies=False):
+    if return_energies:
+        energies = []
+        grad_mag = []
+        noise_mag = []
     if conditional_mask is None:
         conditional_mask = torch.ones((1, x.shape[1]), device=device)
     gradient_enabled_mask = torch.cat([torch.ones((1, x.shape[1] - 10)),
                                        torch.zeros((1, 10))], dim=1).to(x)
     for _ in tqdm(range(sample_steps)):
-        noise = torch.randn_like(x) * noise_scale
-        model_output = model(x + noise)
+        # Noise / implementation in the style of Du 2019
+        # noise = torch.randn_like(x) * noise_scale
+        # model_output = model(x + noise)
+        # Noise / implementation in the style of Nijkamp 2020
+        noise = torch.randn_like(x) * step_size
+        model_output = model(x)
+        if return_energies:
+            energies.append(model_output.to('cpu').detach().numpy())
         # Only inputs so that only grad wrt x is calculated (and not all remaining vars)
-        gradient = torch.autograd.grad(model_output.sum(), x, only_inputs=True)[0]
-        x = x - gradient * step_size * conditional_mask * gradient_enabled_mask
+        # implementation in the style of Nijkamp 2020
+        gradient = torch.autograd.grad(model_output.sum(), x, only_inputs=True)[0] * (step_size ** 2) / 2
+        # implementation in the style of Du 2019
+        # gradient = torch.autograd.grad(model_output.sum(), x, only_inputs=True)[0] * step_size
+        if return_energies:
+            grad_mag.append(gradient.to('cpu').detach().numpy())
+            noise_mag.append(noise.to('cpu').detach().numpy())
+        x = x - (gradient - noise) * gradient_enabled_mask * conditional_mask
+    if return_energies:
+        return x, energies, grad_mag, noise_mag
     return x
 
 
-def plot_all_msi(data_samps, data_valid, data_valid_idx, ptp):
+def plot_all_msi(data_samps, data_valid, data_valid_idx, ptp, fig=None, axes=None):
     data_sub_samps = data_samps[:]
     data_samps_mean = np.mean(data_sub_samps, axis=0)
     # data_samps_std = np.std(data_sub_samps, axis=0)
 
-    fig, axes = plt.subplots(5, 2, figsize=(8, 7), dpi=200)
+    if fig is None and axes is None:
+        fig, axes = plt.subplots(5, 2, figsize=(8, 7), dpi=200)
 
     for ax in axes.flatten():
         ax.set_autoscale_on(False)
@@ -139,27 +160,18 @@ def plot_all_msi(data_samps, data_valid, data_valid_idx, ptp):
     axes[4, 0].plot(B_xrange, data_samps_mean[32 * 8:32 * 8 + 64] * ptp['magnet_profile'], color=colors[4])
     axes[4, 1].scatter(np.arange(51), data_samps_mean[32 * 8 + 64:32 * 8 + 64 + 51] * ptp['pressures'], color=colors[4])
 
-    axes[0, 0].plot(xrange, data_valid[data_valid_idx, 32 * 0:32 * 1] * ptp['discharge_current'], color=colors[0])
-    axes[0, 1].plot(xrange, data_valid[data_valid_idx, 32 * 1:32 * 2] * ptp['discharge_voltage'], color=colors[0])
-    axes[1, 0].plot(xrange, data_valid[data_valid_idx, 32 * 2:32 * 3] * ptp['interferometer'], color=colors[0])
-    axes[1, 1].plot(xrange, data_valid[data_valid_idx, 32 * 3:32 * 4] * ptp['diode_0'], color=colors[0])
-    axes[2, 0].plot(xrange, data_valid[data_valid_idx, 32 * 4:32 * 5] * ptp['diode_1'], color=colors[0])
-    axes[2, 1].plot(xrange, data_valid[data_valid_idx, 32 * 5:32 * 6] * ptp['diode_2'], color=colors[0])
-    axes[3, 0].plot(xrange, data_valid[data_valid_idx, 32 * 6:32 * 7] * ptp['diode_3'], color=colors[0])
-    axes[3, 1].plot(xrange, data_valid[data_valid_idx, 32 * 7:32 * 8] * ptp['diode_4'], color=colors[0])
-    axes[4, 0].plot(B_xrange, data_valid[data_valid_idx, 32 * 8:32 * 8 + 64] * ptp['magnet_profile'], color=colors[0])
-    axes[4, 1].scatter(np.arange(51), data_valid[data_valid_idx, 32 * 8 + 64:32 * 8 + 64 + 51] * ptp['pressures'], color=colors[0])
-
-    axes[0, 0].plot(xrange, data_valid[15000, 32 * 0:32 * 1] * ptp['discharge_current'], color=colors[0])
-    axes[0, 1].plot(xrange, data_valid[15000, 32 * 1:32 * 2] * ptp['discharge_voltage'], color=colors[0])
-    axes[1, 0].plot(xrange, data_valid[15000, 32 * 2:32 * 3] * ptp['interferometer'], color=colors[0])
-    axes[1, 1].plot(xrange, data_valid[15000, 32 * 3:32 * 4] * ptp['diode_0'], color=colors[0])
-    axes[2, 0].plot(xrange, data_valid[15000, 32 * 4:32 * 5] * ptp['diode_1'], color=colors[0])
-    axes[2, 1].plot(xrange, data_valid[15000, 32 * 5:32 * 6] * ptp['diode_2'], color=colors[0])
-    axes[3, 0].plot(xrange, data_valid[15000, 32 * 6:32 * 7] * ptp['diode_3'], color=colors[0])
-    axes[3, 1].plot(xrange, data_valid[15000, 32 * 7:32 * 8] * ptp['diode_4'], color=colors[0])
-    axes[4, 0].plot(B_xrange, data_valid[15000, 32 * 8:32 * 8 + 64] * ptp['magnet_profile'], color=colors[0])
-    axes[4, 1].scatter(np.arange(51), data_valid[15000, 32 * 8 + 64:32 * 8 + 64 + 51] * ptp['pressures'], color=colors[0])
+    if len(data_valid_idx) > 0:
+        for idx in data_valid_idx:
+            axes[0, 0].plot(xrange, data_valid[idx, 32 * 0:32 * 1] * ptp['discharge_current'], color=colors[0])
+            axes[0, 1].plot(xrange, data_valid[idx, 32 * 1:32 * 2] * ptp['discharge_voltage'], color=colors[0])
+            axes[1, 0].plot(xrange, data_valid[idx, 32 * 2:32 * 3] * ptp['interferometer'], color=colors[0])
+            axes[1, 1].plot(xrange, data_valid[idx, 32 * 3:32 * 4] * ptp['diode_0'], color=colors[0])
+            axes[2, 0].plot(xrange, data_valid[idx, 32 * 4:32 * 5] * ptp['diode_1'], color=colors[0])
+            axes[2, 1].plot(xrange, data_valid[idx, 32 * 5:32 * 6] * ptp['diode_2'], color=colors[0])
+            axes[3, 0].plot(xrange, data_valid[idx, 32 * 6:32 * 7] * ptp['diode_3'], color=colors[0])
+            axes[3, 1].plot(xrange, data_valid[idx, 32 * 7:32 * 8] * ptp['diode_4'], color=colors[0])
+            axes[4, 0].plot(B_xrange, data_valid[idx, 32 * 8:32 * 8 + 64] * ptp['magnet_profile'], color=colors[0])
+            axes[4, 1].scatter(np.arange(51), data_valid[idx, 32 * 8 + 64:32 * 8 + 64 + 51] * ptp['pressures'], color=colors[0])
 
     axes[0, 0].set_title('Discharge I (Amps) vs ms')
     axes[0, 1].set_title('Discharge V vs ms')
@@ -175,9 +187,10 @@ def plot_all_msi(data_samps, data_valid, data_valid_idx, ptp):
     plt.tight_layout()
 
 
-def plot_diagnostics_histogram(data_samps, data, ptp):
+def plot_diagnostics_histogram(data_samps, data, ptp, fig=None, axes=None):
     n_bins = 200
-    fig, axes = plt.subplots(5, 2, figsize=(8, 7), dpi=200)
+    if fig is None and axes is None:
+        fig, axes = plt.subplots(5, 2, figsize=(8, 7), dpi=200)
     axes[0, 0].hist(np.mean(data[:, 32 * 0:32 * 1].detach().numpy()[:, 16:22], axis=1) * ptp['discharge_current'], bins=n_bins, density=True, color=data_color)
     axes[0, 1].hist(np.mean(data[:, 32 * 1:32 * 2].detach().numpy()[:, 16:22], axis=1) * ptp['discharge_voltage'], bins=n_bins, density=True, color=data_color)
     axes[1, 0].hist(np.mean(data[:, 32 * 2:32 * 3].detach().numpy()[:, 16:22], axis=1) * ptp['interferometer'], bins=n_bins, density=True, color=data_color)
@@ -214,9 +227,10 @@ def plot_diagnostics_histogram(data_samps, data, ptp):
     plt.tight_layout()
 
 
-def plot_energy_histogram(data, data_samps, n_samp, n_samp_divis):
+def plot_energy_histogram(data, data_samps, n_samp, n_samp_divis, fig=None, axes=None):
     n_bins = 201
-    fig, axes = plt.subplots(1, 1, figsize=(8, 6), dpi=200)
+    if fig is None and axes is None:
+        fig, axes = plt.subplots(1, 1, figsize=(8, 6), dpi=200)
     plt.title('Energy histogram')
     axes.hist(np.concatenate([model(data[np.random.randint(0, data.shape[0], n_samp)].to(device)).to('cpu').detach().numpy() for i in range(n_samp_divis)], 0),
               bins=n_bins, density=True, color=data_color)
@@ -225,12 +239,36 @@ def plot_energy_histogram(data, data_samps, n_samp, n_samp_divis):
               color=aux_color)
 
 
-def conditionally_sample(init_data, n_samp, steps, step_size, noise, samp_begin, samp_end, includes_flags=True):
+def plot_mcmc_trajectories(energies, samp_grad, samp_noise, fig=None, axes=None):
+    if fig is None and axes is None:
+        fig, axes = plt.subplots(3, 1, figsize=(8, 9), dpi=200)
+    plt.suptitle('MCMC energies vs step')
+    # random_plt_idx = np.random.randint(0, high=energies.shape[1], size=7)
+    for i in range(7):
+        axes[0].plot(energies[:, i, 0])
+        axes[1].plot(energies[:, i, 0])
+        p = axes[2].plot(np.mean(samp_grad[:, i, :] ** 2, axis=1) ** 0.5)
+        # axes[3].plot(np.mean(samp_noise[:, i, :] ** 2, axis=1) ** 0.5,
+                     # color=p[0].get_color(), linestyle='dashed')
+        axes[2].set_title('Energy gradient magnitudes')
+        # axes[3].set_title('Noise magnitudes')
+        axes[2].set_xlabel('Sampler step')
+    axes[0].set_xscale('log')
+    plt.tight_layout()
+
+
+def conditionally_sample(init_data, n_samp, steps, step_size, noise, samp_begin, samp_end,
+                         includes_flags=True, return_energies=False):
     data_samps = init_data.clone()
     data_samps[:, samp_begin:samp_end] = torch.rand((n_samp, samp_end - samp_begin), requires_grad=True).to(device) * 2 - 1
     # samps = perturb_samples(samps)
     conditional_mask = torch.zeros((1, data_samps.shape[1]), device=device)
     conditional_mask[:, samp_begin:samp_end] = torch.ones((1, samp_end - samp_begin), device=device)
+
+    if return_energies:
+        energies = []
+        grad_mag = []
+        noise_mag = []
 
     for i in tqdm(range(3)):
         # if includes_flags:
@@ -238,49 +276,68 @@ def conditionally_sample(init_data, n_samp, steps, step_size, noise, samp_begin,
         # else:
         #     data_samps[:, samp_begin:samp_end] = perturb_samples(data_samps[:, samp_begin:samp_end])
         data_samps = sample_langevin_cuda_tqdm(data_samps, model, step_size=step_size, sample_steps=steps,
-                                               noise_scale=noise, conditional_mask=conditional_mask)
+                                               noise_scale=noise, conditional_mask=conditional_mask,
+                                               return_energies=return_energies)
+        if isinstance(data_samps, tuple):
+            energies.append(data_samps[1])
+            grad_mag.append(data_samps[2])
+            noise_mag.append(data_samps[3])
+            data_samps = data_samps[0]
     data_samps = data_samps.to('cpu').detach().numpy()
 
+    if return_energies:
+        energies = np.concatenate(energies, axis=0)
+        grad_mag = np.concatenate(grad_mag, axis=0)
+        noise_mag = np.concatenate(noise_mag, axis=0)
+        return data_samps, energies, grad_mag, noise_mag
     # torch.cuda.empty_cache()
     return data_samps
 
 
 if __name__ == '__main__':
-    device = torch.device('cuda:0')
+    parser = argparse.ArgumentParser(description="Train the modular EBM")
+    parser.add_argument('--device', type=str, default='cuda:0')
+    parser.add_argument('--plot_buffer', type=bool, default=True)
+    parser.add_argument('--path', type=str, default=None)
+    parser.add_argument('--sample_splits', type=int, default=1)
+    parser.add_argument('--n_samps', type=int, default=128)
+    args = parser.parse_args()
+
+    device = torch.device(args.device)
     # device = torch.device('cpu')
 
     sys.path.remove('/home/phil/Desktop/EBMs/lapd-ebm')  # Remove this script directory path
 
-    # experiments_dir = "/home/phil/Desktop/EBMs/lapd-ebm/experiments_modular"
+    experiments_dir = "/home/phil/Desktop/EBMs/lapd-ebm/experiments_modular"
     # filepaths = []
     # for dirpath, dirs, files in os.walk(experiments_dir):
     #     for f in files:
     #         if ".pt" in f:
     #             filepaths.append(os.path.join(dirpath, f))
     # filepaths = sorted(filepaths)
-
     # filepaths = filepaths[133:]
-    # filepaths = [
-    #              '2022-09-29_19h-42m-21s/checkpoints/model-0-2566.pt',
-    #              '2022-09-29_19h-43m-50s/checkpoints/model-0-1565.pt',
-    #              '2022-09-29_19h-45m-53s/checkpoints/model-0-4063.pt',
-    #             ]
 
-    experiments_dir = "/home/phil/Desktop/EBMs/lapd-ebm/experiments_modular"
-    filepaths = []
+    if args.path is None:
+        filepaths = [
+                     '2023-02-14_01h-26m-14s/checkpoints/model-19-499.pt',
+                     '2023-02-14_01h-26m-14s/checkpoints/model-18-97.pt',
+                     '2023-02-14_01h-26m-14s/checkpoints/model-16-88.pt',
+                     '2023-02-14_01h-26m-14s/checkpoints/model-14-75.pt',
+                     '2023-02-14_01h-26m-14s/checkpoints/model-12-63.pt',
+                     '2023-02-14_01h-26m-14s/checkpoints/model-10-58.pt',
+                     '2023-02-14_01h-26m-14s/checkpoints/model-8-46.pt',
+                     '2023-02-14_01h-26m-14s/checkpoints/model-6-26.pt',
+                     '2023-02-14_01h-26m-14s/checkpoints/model-4-26.pt',
+                     '2023-02-14_01h-26m-14s/checkpoints/model-2-12.pt',
+                     '2023-02-14_01h-26m-14s/checkpoints/model-0-3.pt'
+                    ]
+    else:
+        filepaths = [args.path]
+
+    # experiments_dir = "/home/phil/Desktop/EBMs/lapd-ebm/experiments_modular"
+    # filepaths = []
     # filepaths.extend(glob.glob('experiments_modular/2022-09-29_19h-42m-21s/checkpoints/*.pt'))
-    filepaths.extend(glob.glob('experiments_modular/2022-09-29_19h-43m-50s/checkpoints/*.pt'))
-    filepaths.extend(glob.glob('experiments_modular/2022-09-29_19h-45m-53s/checkpoints/*.pt'))
-    filepaths.extend(glob.glob('experiments_modular/2022-09-29_23h-42m-39s/checkpoints/*.pt'))
-    filepaths.extend(glob.glob('experiments_modular/2022-09-29_23h-44m-08s/checkpoints/*.pt'))
-    filepaths.extend(glob.glob('experiments_modular/2022-09-29_23h-46m-10s/checkpoints/*.pt'))
-    filepaths.extend(glob.glob('experiments_modular/2022-09-30_03h-42m-58s/checkpoints/*.pt'))
-    filepaths.extend(glob.glob('experiments_modular/2022-09-30_03h-44m-28s/checkpoints/*.pt'))
-    filepaths.extend(glob.glob('experiments_modular/2022-09-30_03h-46m-27s/checkpoints/*.pt'))
-    filepaths.extend(glob.glob('experiments_modular/2022-09-30_07h-43m-15s/checkpoints/*.pt'))
-    filepaths.extend(glob.glob('experiments_modular/2022-09-30_07h-44m-49s/checkpoints/*.pt'))
-    filepaths.extend(glob.glob('experiments_modular/2022-09-30_07h-46m-44s/checkpoints/*.pt'))
-    filepaths = [f.replace('experiments_modular/', '') for f in filepaths]
+    # filepaths = [f.replace('experiments_modular/', '') for f in filepaths]
 
     for f in filepaths:
         try:
@@ -321,7 +378,8 @@ if __name__ == '__main__':
                     return x
 
             model = ebm.ModularWithRNNBackbone(hyperparams).to(device)
-            ckpt = torch.load("experiments_modular/" + f)
+            # model = ebm.ModularWithRNNBackbone().to(device)
+            ckpt = torch.load(rundir + "/checkpoints/" + model_num)
 
             model_dict = OrderedDict()
             pattern = re.compile('module.')
@@ -349,12 +407,12 @@ if __name__ == '__main__':
             ptp = np.load(dataset)['scale']
             datasize = data.shape[1]
 
-            n_samp_total = 128
-            n_samp_divis = 1
+            n_samp_total = args.n_samps
+            n_samp_divis = args.sample_splits
             n_samp = n_samp_total // n_samp_divis
 
-            data_valid_idx = 50123
-            if 'replay_buffer_list' in list(ckpt.keys()):
+            data_valid_idx = [15000, 50123]
+            if 'replay_buffer_list' in list(ckpt.keys()) and args.plot_buffer is True:
                 buff_samps = ckpt['replay_buffer_list'].detach().cpu().numpy()
                 print(buff_samps.shape)
                 print("Plotting replay buffer...")
@@ -376,57 +434,92 @@ if __name__ == '__main__':
             steps = sample_steps * 2
             step_size = step_size
             noise = noise
+            init_data = data_valid[data_valid_idx[1]].clone().detach().repeat((n_samp, 1)).to(device)
 
-            # data_valid_idx = 15000
-            data_valid_idx = 50123
+            data_valid_idx = [15000, 50123]
             samp_begin = 32 * 0
             samp_end = datasize - 10
 
-            init_data = data_valid[data_valid_idx].clone().detach().repeat((n_samp, 1)).to(device)
             data_samps = []
+            data_energies = []
+            samp_grad = []
+            samp_noise = []
             for i in range(n_samp_divis):
-                data_samps.append(conditionally_sample(init_data, n_samp, steps, step_size, noise, samp_begin, samp_end, includes_flags=True))
+                temp_samps, temp_energies, temp_samp_grad, temp_samp_noise = conditionally_sample(init_data, n_samp, steps, step_size, noise,
+                                                       samp_begin, samp_end, includes_flags=True,
+                                                       return_energies=True)
+                data_samps.append(temp_samps)
+                data_energies.append(temp_energies)
+                samp_grad.append(temp_samp_grad)
+                samp_noise.append(temp_samp_noise)
             data_samps = np.concatenate(data_samps, 0)
-
+            data_energies = np.concatenate(data_energies, 1)
+            samp_grad = np.concatenate(samp_grad, 1)
+            samp_noise = np.concatenate(samp_noise, 1)
             print("Plotting unconditional samples")
-
             plot_all_msi(data_samps, data_valid, data_valid_idx, ptp)
             plt.savefig("experiments_modular/" + identifier + "/plots/traces-unconditional-" + model_num + ".png")
-
             # ------ Plot energy histrogram ------ #
-
             plot_energy_histogram(data, data_samps, n_samp, n_samp_divis)
             plt.savefig("experiments_modular/" + identifier + "/plots/energies-unconditional-" + model_num + ".png")
-
             # ------ Plot Diagnostics histogram ------ #
-
             plot_diagnostics_histogram(data_samps, data, ptp)
             plt.savefig("experiments_modular/" + identifier + "/plots/hist-unconditional-" + model_num + ".png")
+            print("Plotting MCMC energy trajectories...")
+            plot_mcmc_trajectories(data_energies, samp_grad, samp_noise)
+            plt.savefig("experiments_modular/" + identifier + "/plots/mcmc-unconditional-" + model_num + ".png")
 
             print("Conditional sampling...")
-            data_valid_idx = 50123
             samp_begin = 32 * 0
             samp_end = 32 * 8
+
             data_samps = []
+            data_energies = []
+            samp_grad = []
+            samp_noise = []
             for i in range(n_samp_divis):
-                data_samps.append(conditionally_sample(init_data, n_samp, steps, step_size, noise, samp_begin, samp_end, includes_flags=False))
+                temp_samps, temp_energies, temp_samp_grad, temp_samp_noise = conditionally_sample(init_data, n_samp, steps, step_size, noise,
+                                                       samp_begin, samp_end, includes_flags=True,
+                                                       return_energies=True)
+                data_samps.append(temp_samps)
+                data_energies.append(temp_energies)
+                samp_grad.append(temp_samp_grad)
+                samp_noise.append(temp_samp_noise)
             data_samps = np.concatenate(data_samps, 0)
+            data_energies = np.concatenate(data_energies, 1)
+            samp_grad = np.concatenate(samp_grad, 1)
+            samp_noise = np.concatenate(samp_noise, 1)
             print("Plotting conditional samples")
-            plot_all_msi(data_samps, data_valid, data_valid_idx, ptp)
+            plot_all_msi(data_samps, data_valid, [data_valid_idx[1]], ptp)
             plt.savefig("experiments_modular/" + identifier + "/plots/traces-conditional-" + model_num + ".png")
             plot_energy_histogram(data, data_samps, n_samp, n_samp_divis)
             plt.savefig("experiments_modular/" + identifier + "/plots/energies-conditional-" + model_num + ".png")
             plot_diagnostics_histogram(data_samps, data, ptp)
             plt.savefig("experiments_modular/" + identifier + "/plots/hist-conditional-" + model_num + ".png")
+            plot_mcmc_trajectories(data_energies, samp_grad, samp_noise)
+            plt.savefig("experiments_modular/" + identifier + "/plots/mcmc-conditional-" + model_num + ".png")
 
             print("Single diagnostic sampling...")
-            data_valid_idx = 50123
             samp_begin = 32 * 5
             samp_end = 32 * 6
+
             data_samps = []
+            data_energies = []
+            samp_grad = []
+            samp_noise = []
             for i in range(n_samp_divis):
-                data_samps.append(conditionally_sample(init_data, n_samp, steps, step_size, noise, samp_begin, samp_end, includes_flags=False))
+                temp_samps, temp_energies, temp_samp_grad, temp_samp_noise = conditionally_sample(init_data, n_samp, steps, step_size, noise,
+                                                       samp_begin, samp_end, includes_flags=True,
+                                                       return_energies=True)
+                data_samps.append(temp_samps)
+                data_energies.append(temp_energies)
+                samp_grad.append(temp_samp_grad)
+                samp_noise.append(temp_samp_noise)
             data_samps = np.concatenate(data_samps, 0)
+            data_energies = np.concatenate(data_energies, 1)
+            samp_grad = np.concatenate(samp_grad, 1)
+            samp_noise = np.concatenate(samp_noise, 1)
+
             range_begin = 32 * 5
             range_end = 32 * (5 + 1)
             data_sub_samps = data_samps[:, range_begin:range_end]
@@ -437,11 +530,11 @@ if __name__ == '__main__':
 
             for i in range(data_sub_samps.shape[0]):
                 axes[0].plot(xrange, data_sub_samps[i] * ptp['diode_1'], color=colors[-1], label="Sampled" if i == 0 else None)
-            axes[0].plot(xrange, data_valid[data_valid_idx, range_begin:range_end] * ptp['diode_1'], color=colors[0], label="Real")
+            axes[0].plot(xrange, data_valid[data_valid_idx[1], range_begin:range_end] * ptp['diode_1'], color=colors[0], label="Real")
             axes[0].plot(xrange, data_samps_mean * ptp['diode_1'], color=colors[4], label="Sampled mean")
             for i in range(data_sub_samps.shape[0]):
                 axes[1].plot(xrange, (data_sub_samps[i] - data_samps_mean) * ptp['diode_1'], color=colors[-1])
-            axes[1].plot(xrange, (data_valid[data_valid_idx, range_begin:range_end] - data_samps_mean) * ptp['diode_1'], color=colors[0])
+            axes[1].plot(xrange, (data_valid[data_valid_idx[1], range_begin:range_end] - data_samps_mean) * ptp['diode_1'], color=colors[0])
             axes[1].plot(xrange, np.zeros(32), color=colors[4])
             axes[0].set_title('Diode 1 signal (Volts)')
             axes[1].set_title('Real minus sampled')
@@ -452,6 +545,10 @@ if __name__ == '__main__':
 
             plot_energy_histogram(data, data_samps, n_samp, n_samp_divis)
             plt.savefig("experiments_modular/" + identifier + "/plots/energies-single-" + model_num + ".png")
+
+            plot_mcmc_trajectories(data_energies, samp_grad, samp_noise)
+            plt.savefig("experiments_modular/" + identifier + "/plots/mcmc-single-" + model_num + ".png")
+
             plt.close('all')
 
             # Remove module path

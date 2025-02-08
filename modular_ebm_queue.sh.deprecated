@@ -1,0 +1,55 @@
+#!/bin/bash
+
+change_file() {
+	widths=$1
+	heads=$2
+	dataset=$3
+
+	sed -i "s/^        self.embed_dim = embed_dim = .*/        self.embed_dim = embed_dim = ${widths}/" modular_ebm.py
+	sed -i "s/^        self.dense_width = dense_width = .*/        self.dense_width = dense_width = ${widths}/" modular_ebm.py
+	sed -i "s/^        num_heads = .*/        num_heads = ${heads}/" modular_ebm.py
+	sed -i "s/^        num_hidden = .*/        num_hidden = ${widths}/" modular_ebm.py
+	sed -i "s/^        energy_num_heads = .*/        energy_num_heads = ${heads}/" modular_ebm.py
+	sed -i "s/^        energy_num_hidden = .*/        energy_num_hidden = ${widths}/" modular_ebm.py
+
+	sed -i "s/^        'dataset': .*/        'dataset': \"${dataset}\"/" modular_ebm.py
+}
+
+size=$1
+port=$2
+
+if [[ "$size" == "small" ]]; then
+	width=64
+	head=2
+elif [[ "$size" == "medium" ]]; then
+	width=128
+	head=4
+elif [[ "$size" == "large" ]]; then
+	width=256
+	head=8
+elif [[ "$size" == "xlarge" ]]; then
+	width=512
+	head=16
+else
+	echo "choose between small, medium, large, and xlarge"
+	exit 1
+fi
+
+WORLD_SIZE=1
+MASTER_PORT=$port
+
+dataset="data-MSI-mini_2022-9-28_sets-4-train.npz"
+change_file ${width} ${head} ${dataset}
+$(python -m torch.distributed.run --nnodes=1 --nproc_per_node=1 --master_port ${port} modular_ebm.py > /dev/tty)
+
+dataset="data-MSI-mini_2022-9-28_sets-3-train.npz"
+change_file ${width} ${head} ${dataset}
+$(python -m torch.distributed.run --nnodes=1 --nproc_per_node=1 --master_port ${port} modular_ebm.py > /dev/tty)
+
+dataset="data-MSI-mini_2022-9-28_sets-2-train.npz"
+change_file ${width} ${head} ${dataset}
+$(python -m torch.distributed.run --nnodes=1 --nproc_per_node=1 --master_port ${port} modular_ebm.py > /dev/tty)
+
+dataset="data-MSI-mini_2022-9-28_sets-1-train.npz"
+change_file ${width} ${head} ${dataset}
+$(python -m torch.distributed.run --nnodes=1 --nproc_per_node=1 --master_port ${port} modular_ebm.py > /dev/tty)
